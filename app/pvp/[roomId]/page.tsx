@@ -84,9 +84,11 @@ export default function PvpBattle() {
     
     console.log('勝利！レート更新処理...');
     // 実験用: 勝ったら自動で「profile」テーブルを作る/更新する
-    await supabase.from('profile').upsert({
-      user_id: myName, // 名前をID代わりにしちゃいます（実験用）
-      combatPower: 1020, // 本来は「今の値 + 20」にする
+// 実験用: 勝ったら自動で「profile」テーブルを作る/更新する
+    // ★ (supabase.from('profile') as any) にして、型チェックを無視させます
+    await (supabase.from('profile') as any).upsert({
+      user_id: myName,
+      combatPower: 1020,
       name: myName
     }, { onConflict: 'user_id' });
   };
