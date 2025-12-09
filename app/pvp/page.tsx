@@ -34,8 +34,9 @@ export default function PvpLobby() {
   const joinRoom = async () => {
     if (!roomId || !playerName) return alert('部屋IDと名前を入力してください');
 
-    const { error } = await supabase.from('battle_room')
-      .update({ player2: playerName }) // Player2として参加
+// ★ここも (supabase.from('battle_room') as any) を使います！
+    const { error } = await (supabase.from('battle_room') as any)
+      .update({ player2: playerName }) 
       .eq('id', roomId);
 
     if (error) alert('部屋が見つかりません');
