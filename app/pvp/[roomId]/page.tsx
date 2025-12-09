@@ -118,7 +118,9 @@ export default function PvpBattle() {
     }
 
     // DB更新
-    await supabase.from('battle_room').update({
+ // DB更新
+    // ★ここも (supabase.from('battle_room') as any) に書き換えます
+    await (supabase.from('battle_room') as any).update({
       boardState: {
         ...board,
         p1_hp: newP1Hp,
