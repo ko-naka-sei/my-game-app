@@ -32,13 +32,14 @@ export default function PvpBattle() {
       if (!roomId) return;
 
       // ★追加2: "as string" をつけて「これは文字だよ」と教える
-      const { data } = await supabase
+    const { data } = await supabase
         .from('battle_room')
         .select('*')
         .eq('id', roomId as string) 
         .single();
 
-      if (data) setBoard(data.boardState);
+      // ★修正: (data as any) をつけて「型チェックを無視」させます
+      if (data) setBoard((data as any).boardState);
     };
     fetchInitial();
 
