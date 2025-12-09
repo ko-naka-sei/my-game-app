@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------
+// 1. リアルタイム通信（実験用）
+// ------------------------------------------------
+model RealtimeTest {
+  id        String   @id
+  message   String
+  updatedAt DateTime @updatedAt
+
+  @@map("realtime_test")
+}
+
+// ------------------------------------------------
+// 2. ゲーム用ユーザーデータ（将来用）
+// ------------------------------------------------
+model Profile {
+  id          String   @id @default(uuid())
+  user_id     String   @unique
+  name        String?
+  combatPower Int      @default(1000) // 戦闘力
+  deckData    Json?    // 保存したデッキ
+  updatedAt   DateTime @updatedAt
+
+  @@map("profile")
+}
+
+// PvP対戦用の部屋
+model BattleRoom {
+  id          String   @id // 部屋ID (例: "1234")
+  player1     String?  // プレイヤー1のID (今回は仮の名前を入れる)
+  player2     String?  // プレイヤー2のID
+  
+  // 盤面のすべて (お互いのHP、ターン、手札など)
+  boardState  Json
+  
+  updatedAt   DateTime @updatedAt
+  
+  @@map("battle_room")
+}
