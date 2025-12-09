@@ -19,7 +19,8 @@ export default function PvpLobby() {
       last_action: 'ゲーム開始'
     };
 
-    const { error } = await supabase.from('battle_room').insert({
+// ★ (supabase.from(...) as any) を使ってエラー回避
+    const { error } = await (supabase.from('battle_room') as any).insert({
       id: roomId,
       player1: playerName,
       boardState: initialState
