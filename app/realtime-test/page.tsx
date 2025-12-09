@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '@/lib/supabase'; // パス修正が必要な場合は ../../lib/supabase などに合わせてください
 
 export default function RealtimePage() {
   const [message, setMessage] = useState('読み込み中...');
@@ -11,8 +11,8 @@ export default function RealtimePage() {
   useEffect(() => {
     // 初回データ取得
     const fetchInitialData = async () => {
-      const { data } = await supabase
-        .from('realtime_test')
+      // ★修正: (supabase.from(...) as any) を使用
+      const { data } = await (supabase.from('realtime_test') as any)
         .select('*')
         .eq('id', 'room-1')
         .single();
@@ -31,17 +31,17 @@ export default function RealtimePage() {
       .on(
         'postgres_changes',
         {
-          event: 'UPDATE', // 更新があったら教えて！
+          event: 'UPDATE', 
           schema: 'public',
           table: 'realtime_test',
-          filter: 'id=eq.room-1', // room-1の変更だけ監視
+          filter: 'id=eq.room-1',
         },
         (payload) => {
-          // 変更通知が来たらここが動く
           console.log('変更検知！', payload);
-          const newData = payload.new as { message: string };
+          // ★修正: payload.new も any 型として扱う
+          const newData = payload.new as any;
           setMessage(newData.message);
-          setLastUpdate(new Date().toLocaleTimeString()); // 更新時刻を表示
+          setLastUpdate(new Date().toLocaleTimeString());
         }
       )
       .subscribe();
@@ -54,11 +54,10 @@ export default function RealtimePage() {
 
   // 2. ボタンを押した時の処理
   const handlePress = async (btnName: string) => {
-    // 画面を直接書き換えず、データベースだけを更新する
     const msg = `誰かが「${btnName}」を押しました！`;
     
-    await supabase
-      .from('realtime_test')
+    // ★修正: ここも (supabase.from(...) as any) を使用
+    await (supabase.from('realtime_test') as any)
       .update({ message: msg })
       .eq('id', 'room-1');
   };
