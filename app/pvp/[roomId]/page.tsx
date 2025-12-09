@@ -24,10 +24,20 @@ export default function PvpBattle() {
   const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
   // 1. リアルタイム通信 & 決着監視
+// 1. リアルタイム通信 & 決着監視
   useEffect(() => {
     // 初回読み込み
     const fetchInitial = async () => {
-      const { data } = await supabase.from('battle_room').select('*').eq('id', roomId).single();
+      // ★追加1: URLがないときは何もしない（エラー防止）
+      if (!roomId) return;
+
+      // ★追加2: "as string" をつけて「これは文字だよ」と教える
+      const { data } = await supabase
+        .from('battle_room')
+        .select('*')
+        .eq('id', roomId as string) 
+        .single();
+
       if (data) setBoard(data.boardState);
     };
     fetchInitial();
