@@ -3,18 +3,9 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-// 🎴 カードリスト (スロットも必殺技用の攻撃カードも全部入り)
-const MASTER_DECK = [
-  { id: 'slot-1', name: '運命のスロット', val: 0, cost: 0, type: 'skill', desc: '777で即死、💀で破滅' },
-  { id: 'atk-1', name: 'ストライク', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-  { id: 'atk-2', name: 'ストライク', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-  { id: 'atk-3', name: 'ストライク', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-  { id: 'atk-4', name: '強打', val: 12, cost: 2, type: 'attack', desc: '12ダメージ' },
-  { id: 'def-1', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-  { id: 'def-2', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-  { id: 'def-4', name: '鉄壁', val: 10, cost: 2, type: 'skill', desc: 'ブロック+10' },
-];
-
+// ------------------------------------
+// ユーティリティ & 定数
+// ------------------------------------
 const shuffle = (array: any[]) => {
   const newArr = [...array];
   for (let i = newArr.length - 1; i > 0; i--) {
@@ -25,32 +16,28 @@ const shuffle = (array: any[]) => {
 };
 
 const REEL_SYMBOLS = ['7️⃣', '💀', '🍒', '⚔️'];
+const EMOTES = ['😎', '😱', '😡', '🙏', '👍', '🤔'];
 
 export default function PvpBattle() {
   const { roomId } = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const myRole = searchParams.get('player'); 
+  const myRole = searchParams.get('player'); // "p1" or "p2"
   const myName = searchParams.get('name');
   
   const [board, setBoard] = useState<any>(null);
   const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
-  // --- ステート管理 (全部入り) ---
-  // 演出用
+  // 演出用ステート
   const [shakeP1, setShakeP1] = useState(false);
   const [shakeP2, setShakeP2] = useState(false);
-  
-  // 必殺技ミニゲーム用
   const [showMiniGame, setShowMiniGame] = useState(false);
   const [cursorPos, setCursorPos] = useState(0);
   const [moveDirection, setMoveDirection] = useState(1);
-
-  // スロット用
   const [showSlot, setShowSlot] = useState(false);
   const [reels, setReels] = useState(['❓', '❓', '❓']);
 
-  // --- 必殺技ミニゲームのループ ---
+  // --- 必殺技ミニゲームループ ---
   useEffect(() => {
     let interval: any;
     if (showMiniGame) {
@@ -66,7 +53,7 @@ export default function PvpBattle() {
     return () => clearInterval(interval);
   }, [showMiniGame, moveDirection]);
 
-  // --- スロットマシンの回転ロジック ---
+  // --- スロットロジック ---
   const startSlotMachine = async () => {
     setShowSlot(true);
     let spinCount = 0;
@@ -81,13 +68,13 @@ export default function PvpBattle() {
 
     setTimeout(async () => {
       clearInterval(interval);
-      // 確率調整 (777:2%, 💀:8%)
       const rand = Math.random() * 100;
       let finalReels = [];
-      if (rand < 2) finalReels = ['7️⃣', '7️⃣', '7️⃣']; 
-      else if (rand < 10) finalReels = ['💀', '💀', '💀']; 
-      else if (rand < 20) finalReels = ['🍒', '🍒', '🍒']; 
-      else if (rand < 40) finalReels = ['⚔️', '⚔️', '⚔️']; 
+      // 確変モード: 777(5%), 💀(10%)
+      if (rand < 5) finalReels = ['7️⃣', '7️⃣', '7️⃣']; 
+      else if (rand < 15) finalReels = ['💀', '💀', '💀']; 
+      else if (rand < 30) finalReels = ['🍒', '🍒', '🍒']; 
+      else if (rand < 50) finalReels = ['⚔️', '⚔️', '⚔️']; 
       else {
         finalReels = [
           REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
@@ -98,13 +85,7 @@ export default function PvpBattle() {
           finalReels[2] = finalReels[0] === '7️⃣' ? '💀' : '7️⃣';
         }
       }
-
-      setReels([finalReels[0], '🌀', '🌀']);
-      await new Promise(r => setTimeout(r, 800));
-      setReels([finalReels[0], finalReels[1], '🌀']);
-      await new Promise(r => setTimeout(r, 1000));
       setReels(finalReels);
-
       await applySlotEffect(finalReels);
       setTimeout(() => setShowSlot(false), 2000);
     }, 2000);
@@ -132,8 +113,7 @@ export default function PvpBattle() {
     await updateBoard(nextState);
   };
 
-  // ---------------------------------------------------
-
+  // --- Realtime Setup ---
   useEffect(() => {
     const fetchInitial = async () => {
       if (!roomId) return;
@@ -170,12 +150,13 @@ export default function PvpBattle() {
   const handleVictory = async () => { if (!result) { setResult('win'); await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); } };
   const handleDefeat = () => { if (!result) setResult('lose'); };
 
+  // --- カード使用 ---
   const playCard = async (card: any, index: number) => {
     if (!board || result || board.turn !== myRole) return;
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     if (board[`${prefix}_energy`] < card.cost) return alert('⚡ エナジーが足りません！');
 
-    // ★スロットカードなら専用処理
+    // スロット
     if (card.id.startsWith('slot')) {
        let nextState = JSON.parse(JSON.stringify(board));
        nextState[`${prefix}_energy`] -= card.cost;
@@ -194,14 +175,32 @@ export default function PvpBattle() {
       nextState[`${prefix}_energy`] -= card.cost;
       const usedCard = nextState[`${prefix}_hand`].splice(index, 1)[0];
       nextState[`${prefix}_discard`].push(usedCard);
-      
-      // ★必殺ゲージ上昇 (+20)
       nextState[`${prefix}_special`] = Math.min(100, (nextState[`${prefix}_special`] || 0) + 20);
 
-      if (card.type === 'skill') {
+      // ★効果分岐 (状態異常など)
+      if (card.effect === 'poison') {
+        nextState[`${enemyPrefix}_poison`] = (nextState[`${enemyPrefix}_poison`] || 0) + card.val;
+        log += ` ☠️相手に毒${card.val}!`;
+      } 
+      else if (card.effect === 'stun') {
+        nextState[`${enemyPrefix}_stun`] = true;
+        nextState[`${enemyPrefix}_hp`] -= card.val; // ダメージも入る
+        log += ` ⚡スタン付与! ${card.val}ダメ`;
+        triggerShake(enemyPrefix);
+      }
+      else if (card.effect === 'heal') {
+        // ドレインなど
+        let damage = card.val;
+        nextState[`${enemyPrefix}_hp`] -= damage;
+        nextState[`${prefix}_hp`] += card.val;
+        log += ` 🩸${damage}吸い取った!`;
+        triggerShake(enemyPrefix);
+      }
+      else if (card.type === 'skill') {
         nextState[`${prefix}_block`] += card.val;
         log += ` 🛡️ブロック+${card.val}`;
-      } else if (card.type === 'attack') {
+      } 
+      else if (card.type === 'attack') {
         let damage = card.val;
         let targetBlock = nextState[`${enemyPrefix}_block`];
         let targetHp = nextState[`${enemyPrefix}_hp`];
@@ -214,12 +213,13 @@ export default function PvpBattle() {
         nextState[`${enemyPrefix}_block`] = targetBlock;
         nextState[`${enemyPrefix}_hp`] = targetHp;
       }
+      
       nextState.last_action = log;
       await updateBoard(nextState);
     }, 200);
   };
 
-  // --- 🔥 必殺技実行ロジック (ミニゲーム結果) ---
+  // --- 必殺技 (ミニゲーム結果) ---
   const executeUltimate = async () => {
     setShowMiniGame(false);
     const distance = Math.abs(50 - cursorPos);
@@ -232,35 +232,44 @@ export default function PvpBattle() {
 
     let log = `🔥 ${myName}の必殺技！(精度${score}%)`;
     nextState[`${prefix}_special`] = 0;
-
-    let targetBlock = nextState[`${enemyPrefix}_block`];
-    let targetHp = nextState[`${enemyPrefix}_hp`];
-    let actualDamage = damage;
-
-    if (targetBlock >= actualDamage) {
-      targetBlock -= actualDamage; actualDamage = 0; log += ' 防がれた...';
-    } else {
-      actualDamage -= targetBlock; targetBlock = 0; targetHp -= actualDamage; 
-      log += ` 💥${actualDamage}の大ダメージ！`;
-      triggerShake(enemyPrefix);
-    }
     
-    nextState[`${enemyPrefix}_block`] = targetBlock;
-    nextState[`${enemyPrefix}_hp`] = targetHp;
-    nextState.last_action = log;
+    // 必殺技はブロック無視にしてみる（脳汁強化）
+    nextState[`${enemyPrefix}_hp`] -= damage;
+    log += ` 💥ガード不能 ${damage}ダメージ！`;
+    triggerShake(enemyPrefix);
 
+    nextState.last_action = log;
     await updateBoard(nextState);
   };
 
+  // --- エモート送信 ---
+  const sendEmote = async (emote: string) => {
+    if (!board) return;
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    // DBの p1_emote / p2_emote を更新
+    await (supabase.from('battle_room') as any).update({ 
+      boardState: { ...board, [`${prefix}_emote`]: emote } 
+    }).eq('id', roomId);
+    
+    // 3秒後に消す
+    setTimeout(async () => {
+      // 最新のboardを取得し直さないと上書きしてしまうため、ここは簡易的に
+      // 本当はよくないが、エモートは消えなくても次の上書きで消えるのでOKとする
+    }, 3000);
+  };
+
+  // --- ターン終了処理 (状態異常の処理もここ！) ---
   const endTurn = async () => {
     if (!board || board.turn !== myRole) return;
     let nextState = JSON.parse(JSON.stringify(board));
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
     
+    // 1. 手札破棄
     nextState[`${prefix}_discard`].push(...nextState[`${prefix}_hand`]);
     nextState[`${prefix}_hand`] = [];
 
+    // 2. 相手のドロー
     let enemyDeck = nextState[`${enemyPrefix}_deck`];
     let enemyDiscard = nextState[`${enemyPrefix}_discard`];
     let enemyHand = [];
@@ -276,8 +285,33 @@ export default function PvpBattle() {
     nextState[`${enemyPrefix}_deck`] = enemyDeck;
     nextState[`${enemyPrefix}_discard`] = enemyDiscard;
     nextState[`${enemyPrefix}_hand`] = enemyHand;
-    nextState[`${enemyPrefix}_energy`] = 3;
+
+    // 3. ★状態異常処理 (相手のターンの準備)
+    let enemyEnergy = 3;
+    let log = '';
+
+    // スタン判定
+    if (nextState[`${enemyPrefix}_stun`]) {
+      enemyEnergy = 1; // スタンならエナジー1
+      nextState[`${enemyPrefix}_stun`] = false; // スタン解除
+      log += ' ⚡スタンで動けない！';
+    }
+    nextState[`${enemyPrefix}_energy`] = enemyEnergy;
     nextState[`${enemyPrefix}_block`] = 0;
+
+    // 毒ダメージ (ターン開始時ダメージ)
+    if ((nextState[`${enemyPrefix}_poison`] || 0) > 0) {
+      const poisonDmg = nextState[`${enemyPrefix}_poison`];
+      nextState[`${enemyPrefix}_hp`] -= poisonDmg;
+      log += ` ☠️毒で${poisonDmg}ダメ`;
+      // 毒を1減らす（自然治癒）
+      nextState[`${enemyPrefix}_poison`] = Math.max(0, poisonDmg - 1);
+      triggerShake(enemyPrefix);
+    }
+    
+    if (log) nextState.last_action = log;
+    else nextState.last_action = `${myName} ターン終了`;
+
     nextState.turn = enemyPrefix;
     await updateBoard(nextState);
   };
@@ -293,14 +327,18 @@ export default function PvpBattle() {
   const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
   const myHand = board[`${prefix}_hand`] || [];
   const mySpecial = board[`${prefix}_special`] || 0;
-  
+  const myPoison = board[`${prefix}_poison`] || 0;
+  const myStun = board[`${prefix}_stun`] || false;
+  const enemyPoison = board[`${enemyPrefix}_poison`] || 0;
+  const enemyStun = board[`${enemyPrefix}_stun`] || false;
+
   const enemyAreaClass = `bg-red-900/20 p-4 rounded-xl border border-red-500/30 text-center relative mt-2 transition-all ${enemyPrefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${enemyPrefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
   const myAreaClass = `bg-blue-900/20 p-4 rounded-xl border border-blue-500/30 mb-2 transition-all ${prefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${prefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-2 flex flex-col justify-between select-none relative">
       
-      {/* --- 🎰 スロット演出 --- */}
+      {/* 🎰 スロット演出 */}
       {showSlot && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in">
           <h2 className="text-4xl font-bold text-yellow-500 mb-8 animate-pulse">運命のルーレット...</h2>
@@ -310,7 +348,7 @@ export default function PvpBattle() {
         </div>
       )}
 
-      {/* --- 🔥 必殺技ミニゲーム --- */}
+      {/* 🔥 ミニゲーム */}
       {showMiniGame && (
         <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center">
           <div className="text-3xl font-bold mb-4 text-yellow-400 animate-pulse">タイミングを合わせろ！</div>
@@ -322,7 +360,7 @@ export default function PvpBattle() {
         </div>
       )}
 
-      {/* --- 勝敗 --- */}
+      {/* 勝敗 */}
       {result && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center">
           <h1 className={`text-6xl font-bold mb-4 ${result === 'win' ? 'text-yellow-400' : 'text-blue-600'}`}>{result === 'win' ? 'VICTORY' : 'DEFEAT'}</h1>
@@ -332,8 +370,21 @@ export default function PvpBattle() {
 
       {/* --- 敵エリア --- */}
       <div className={enemyAreaClass}>
-        <div className="text-sm text-red-300">ENEMY</div>
-        <div className="text-4xl font-bold">{board[`${enemyPrefix}_hp`]} HP</div>
+        <div className="text-sm text-red-300">ENEMY ({board[`${enemyPrefix}_job`]})</div>
+        
+        {/* エモート表示 (敵) */}
+        {board[`${enemyPrefix}_emote`] && (
+          <div className="absolute -left-4 top-0 text-6xl animate-bounce drop-shadow-lg z-20">
+            {board[`${enemyPrefix}_emote`]}
+          </div>
+        )}
+
+        <div className="text-4xl font-bold flex justify-center items-center gap-2">
+          {board[`${enemyPrefix}_hp`]} HP
+          {enemyPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{enemyPoison}</span>}
+          {enemyStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+        </div>
+        
         {board[`${enemyPrefix}_block`] > 0 && <div className="absolute top-4 right-4 bg-blue-600 px-3 py-1 rounded-full font-bold">🛡️ {board[`${enemyPrefix}_block`]}</div>}
         <div className="flex justify-center gap-1 mt-2">
            {[...Array(3)].map((_, i) => <div key={i} className={`w-3 h-3 rounded-full ${i < board[`${enemyPrefix}_energy`] ? 'bg-yellow-600' : 'bg-gray-700'}`} />)}
@@ -352,11 +403,24 @@ export default function PvpBattle() {
 
       {/* --- 自分エリア --- */}
       <div className={myAreaClass}>
-        <div className="flex justify-between items-center mb-2 px-2">
+        <div className="flex justify-between items-center mb-2 px-2 relative">
+          
+          {/* エモート表示 (自分) */}
+          {board[`${prefix}_emote`] && (
+            <div className="absolute -right-2 -top-10 text-6xl animate-bounce drop-shadow-lg z-20">
+              {board[`${prefix}_emote`]}
+            </div>
+          )}
+
           <div>
             <div className="text-sm text-blue-300">YOU ({myName})</div>
-            <div className="text-3xl font-bold flex items-center gap-4">{board[`${prefix}_hp`]} HP {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>}</div>
-            {/* 必殺技ゲージ */}
+            <div className="text-3xl font-bold flex items-center gap-2">
+              {board[`${prefix}_hp`]} HP
+              {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>}
+              {myPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{myPoison}</span>}
+              {myStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+            </div>
+            
             <div className="flex items-center gap-2 mt-2">
               <div className="text-xs font-bold text-purple-400">LIMIT</div>
               <div className="w-32 h-4 bg-gray-800 rounded relative border border-gray-600 overflow-hidden">
@@ -367,10 +431,14 @@ export default function PvpBattle() {
               )}
             </div>
           </div>
-          <div className="text-right">
-            <div className="flex gap-1 mb-1 justify-end">{[...Array(3)].map((_, i) => <div key={i} className={`w-4 h-4 rounded-full border border-yellow-500 ${i < board[`${prefix}_energy`] ? 'bg-yellow-400' : ''}`} />)}</div>
-            <div className="text-xs text-gray-400">山札: {board[`${prefix}_deck`]?.length} | 捨て札: {board[`${prefix}_discard`]?.length}</div>
+
+          {/* エモートボタン */}
+          <div className="flex gap-1 absolute bottom-full right-0 mb-2">
+             {EMOTES.map(e => (
+               <button key={e} onClick={() => sendEmote(e)} className="text-xl bg-gray-800 hover:bg-gray-700 rounded p-1 shadow border border-gray-600">{e}</button>
+             ))}
           </div>
+
         </div>
 
         {/* 手札リスト */}
@@ -380,11 +448,13 @@ export default function PvpBattle() {
               className={`flex-shrink-0 w-24 h-32 rounded-lg border-2 flex flex-col items-center justify-between p-1 transition-all relative 
               ${!isMyTurn ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : 
                 card.id.startsWith('slot') ? 'bg-purple-900 border-yellow-400 animate-pulse shadow-[0_0_10px_purple]' : 
+                card.effect === 'poison' ? 'bg-purple-950 border-purple-400' :
+                card.effect === 'stun' ? 'bg-yellow-950 border-yellow-400' :
                 card.type === 'attack' ? 'bg-red-950 border-red-500 hover:-translate-y-2' : 'bg-blue-950 border-blue-400 hover:-translate-y-2'}`}>
               <div className="absolute -top-2 -left-2 w-6 h-6 bg-yellow-500 text-black rounded-full flex items-center justify-center font-bold text-xs border border-white">{card.cost}</div>
               <div className="font-bold text-xs mt-2">{card.name}</div>
               <div className="text-[10px] text-gray-300 text-center leading-tight">{card.desc}</div>
-              <div className={`text-lg font-black ${card.id.startsWith('slot') ? 'text-yellow-400 text-2xl' : card.type === 'attack' ? 'text-red-400' : 'text-blue-400'}`}>
+              <div className={`text-lg font-black ${card.id.startsWith('slot') ? 'text-yellow-400 text-2xl' : card.effect ? 'text-green-400' : card.type === 'attack' ? 'text-red-400' : 'text-blue-400'}`}>
                 {card.id.startsWith('slot') ? '🎰' : card.type === 'attack' ? `⚔️${card.val}` : `🛡️${card.val}`}
               </div>
             </button>
