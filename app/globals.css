@@ -24,3 +24,35 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* app/globals.css の一番下に追加 */
+
+/* --- カスタムアニメーション定義 --- */
+
+/* ダメージを受けた時の振動 (Shake) */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+.animate-shake {
+  animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+  color: #ff6b6b !important; /* ダメージ時に少し赤くする */
+}
+
+/* カードを使った時の飛び出し (Pop Out) */
+@keyframes pop-out {
+  0% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.5) translateY(-100px);
+    opacity: 0;
+  }
+}
+.animate-pop-out {
+  animation: pop-out 0.4s ease-out forwards;
+  pointer-events: none; /* アニメーション中はクリック不可にする */
+  z-index: 50; /* 他のカードより前に出す */
+}
