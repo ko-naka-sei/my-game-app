@@ -77,3 +77,56 @@ body {
   border-color: #ffd700 !important; /* 枠を金色に */
   box-shadow: 0 0 15px rgba(255, 215, 0, 0.5) !important;
 }
+
+/* app/globals.css の一番下に追加 */
+
+/* --- ホログラム（キラカード） --- */
+@keyframes holo-shimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.holo-card-bg {
+  background: linear-gradient(135deg, #ff000044, #ffff0044, #00ff0044, #00ffff44, #0000ff44, #ff00ff44, #ff000044);
+  background-size: 400% 400%;
+  animation: holo-shimmer 3s ease infinite;
+  border-color: #ffd700 !important;
+  box-shadow: 0 0 15px rgba(255, 215, 0, 0.5) !important;
+}
+
+/* --- ★2 合成カード（金枠） --- */
+@keyframes gold-pulse {
+  0% { box-shadow: 0 0 5px gold; }
+  50% { box-shadow: 0 0 20px gold, 0 0 10px white; border-color: white; }
+  100% { box-shadow: 0 0 5px gold; }
+}
+.rank-up-card {
+  border: 2px solid gold !important;
+  animation: gold-pulse 2s infinite;
+  background-color: #2a1a00; /* 少し金っぽい暗さ */
+}
+
+/* --- アーマーブレイク演出 --- */
+@keyframes screen-shatter {
+  0% { transform: scale(1); filter: brightness(1); }
+  10% { transform: scale(1.1) rotate(5deg); filter: brightness(2) sepia(1) hue-rotate(-50deg) saturate(5); } /* 赤く光る */
+  20% { transform: scale(1.1) rotate(-5deg); }
+  30% { transform: scale(1.1) rotate(5deg); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.animate-break {
+  animation: screen-shatter 0.5s ease-out;
+  position: relative;
+}
+.animate-break::after {
+  content: "CRASH!!";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 4rem;
+  font-weight: 900;
+  color: red;
+  text-shadow: 0 0 10px black;
+  z-index: 100;
+  pointer-events: none;
+}

@@ -3,8 +3,10 @@ import { useEffect, useState, useRef, Suspense } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
+export const dynamic = 'force-dynamic';
+
 // ------------------------------------
-// ユーティリティ & 定数
+// 定数・データ
 // ------------------------------------
 const shuffle = (array: any[]) => {
   const newArr = JSON.parse(JSON.stringify(array));
@@ -17,6 +19,7 @@ const shuffle = (array: any[]) => {
 
 const REEL_SYMBOLS = ['7️⃣', '💀', '🍒', '⚔️'];
 const EMOTES = ['😎', '😱', '😡', '🙏', '👍', '🤔'];
+const WEATHER_TYPES = ['none', 'volcano', 'sanctuary', 'storm'];
 
 const RELIC_DATA: any = {
   vampire_fang: { icon: '🧛', desc: '攻撃でダメージを与えるとHPが1回復' },
@@ -35,9 +38,9 @@ function PvpBattleContent() {
   const [board, setBoard] = useState<any>(null);
   const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
-  // 演出用
   const [shakeP1, setShakeP1] = useState(false);
   const [shakeP2, setShakeP2] = useState(false);
+  const [breakAnim, setBreakAnim] = useState(false);
   const [showMiniGame, setShowMiniGame] = useState(false);
   const [cursorPos, setCursorPos] = useState(0);
   const [moveDirection, setMoveDirection] = useState(1);
@@ -46,7 +49,7 @@ function PvpBattleContent() {
 
   const prevHpRef = useRef({ p1: 50, p2: 50 });
 
-  // --- 必殺技ミニゲームループ ---
+  // 必殺技ループ
   useEffect(() => {
     let interval: any;
     if (showMiniGame) {
@@ -62,7 +65,7 @@ function PvpBattleContent() {
     return () => clearInterval(interval);
   }, [showMiniGame, moveDirection]);
 
-  // --- スロットロジック ---
+  // スロットロジック
   const startSlotMachine = async () => {
     setShowSlot(true);
     let spinCount = 0;
@@ -79,7 +82,6 @@ function PvpBattleContent() {
       clearInterval(interval);
       const rand = Math.random() * 100;
       let finalReels = [];
-      
       const prefix = myRole === 'p1' ? 'p1' : 'p2';
       const myRelic = board[`${prefix}_relic`];
       const jackpotChance = myRelic === 'lucky_coin' ? 10 : 5; 
@@ -124,22 +126,14 @@ function PvpBattleContent() {
       log = '🎰 ハズレ... 5ダメージ'; nextState[`${prefix}_hp`] -= 5;
     }
     nextState.last_action = log;
-    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
-  // --- Realtime Setup ---
+  // --- ★修正版 Realtime Setup (データ受信のみ) ---
   useEffect(() => {
     const fetchInitial = async () => {
       if (!roomId) return;
-      console.log("部屋検索中:", roomId);
-      const { data, error } = await (supabase.from('battle_room') as any).select('*').eq('id', roomId as string).single();
-      if (error) {
-        console.error(error);
-        alert('部屋が見つかりません。ロビーで新しい部屋を作ってください。');
-        router.push('/pvp');
-        return;
-      }
+      const { data } = await (supabase.from('battle_room') as any).select('*').eq('id', roomId as string).single();
       if (data) {
         setBoard(data.boardState);
         prevHpRef.current = { p1: data.boardState.p1_hp, p2: data.boardState.p2_hp };
@@ -151,39 +145,64 @@ function PvpBattleContent() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'battle_room', filter: `id=eq.${roomId}` }, 
       (payload) => {
         const newState = (payload.new as any).boardState;
+        
+        // 演出トリガー
+        if (newState.p1_vulnerable && !board?.p1_vulnerable) { setBreakAnim(true); setTimeout(() => setBreakAnim(false), 1000); }
+        if (newState.p2_vulnerable && !board?.p2_vulnerable) { setBreakAnim(true); setTimeout(() => setBreakAnim(false), 1000); }
         if (newState.p1_hp < prevHpRef.current.p1) triggerShake('p1');
         if (newState.p2_hp < prevHpRef.current.p2) triggerShake('p2');
+        
         prevHpRef.current = { p1: newState.p1_hp, p2: newState.p2_hp };
-        setBoard(newState);
-        checkGameOver(newState);
+        setBoard(newState); // ここでは board を更新するだけ
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [roomId]);
+  }, [roomId, board]); // boardを依存配列に入れて比較可能にする
 
+  // --- ★新設: 勝敗監視専用 useEffect ---
+  // board のデータが変わるたびに「HPは0か？」をチェックします
+  useEffect(() => {
+    if (!board || result) return; // すでに決着していたら無視
+
+    // P1が負けた場合
+    if (board.p1_hp <= 0) {
+      // 演出強制オフ
+      setShowMiniGame(false); setShowSlot(false);
+      
+      if (myRole === 'p1') {
+        setResult('lose'); // 自分がP1なら負け画面
+      } else {
+        handleVictory(); // 自分がP2なら勝ち処理
+      }
+    } 
+    // P2が負けた場合
+    else if (board.p2_hp <= 0) {
+      setShowMiniGame(false); setShowSlot(false);
+
+      if (myRole === 'p2') {
+        setResult('lose'); // 自分がP2なら負け画面
+      } else {
+        handleVictory(); // 自分がP1なら勝ち処理
+      }
+    }
+  }, [board, result, myRole]); // boardが変わるたびに発動！
+
+  const handleVictory = async () => { 
+    if(result === 'win') return; // 二重送信防止
+    setResult('win'); 
+    await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); 
+  };
+  
   const triggerShake = (target: 'p1' | 'p2') => {
     if (target === 'p1') { setShakeP1(true); setTimeout(() => setShakeP1(false), 500); }
     else { setShakeP2(true); setTimeout(() => setShakeP2(false), 500); }
   };
 
-  const checkGameOver = (state: any) => {
-    if (!state || result) return;
-    if (state.p1_hp <= 0) {
-      if (myRole === 'p1') handleDefeat(); else handleVictory();
-    } 
-    else if (state.p2_hp <= 0) {
-      if (myRole === 'p2') handleDefeat(); else handleVictory();
-    }
+  const goBackToLobby = () => {
+    window.location.href = '/pvp';
   };
 
-  const handleVictory = async () => { 
-    setResult('win'); 
-    await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); 
-  };
-  
-  const handleDefeat = () => { setResult('lose'); };
-
-  // --- カード使用 ---
+  // --- カード使用ロジック ---
   const playCard = async (card: any, index: number) => {
     if (!board || result || board.turn !== myRole) return;
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
@@ -210,18 +229,21 @@ function PvpBattleContent() {
       nextState[`${prefix}_discard`].push(usedCard);
       nextState[`${prefix}_special`] = Math.min(100, (nextState[`${prefix}_special`] || 0) + 20);
 
+      const isVulnerable = nextState[`${enemyPrefix}_vulnerable`];
+      const damageMultiplier = isVulnerable ? 2 : 1;
+
       if (card.effect === 'poison') {
         nextState[`${enemyPrefix}_poison`] = (nextState[`${enemyPrefix}_poison`] || 0) + card.val;
         log += ` ☠️相手に毒${card.val}!`;
       } 
       else if (card.effect === 'stun') {
         nextState[`${enemyPrefix}_stun`] = true;
-        nextState[`${enemyPrefix}_hp`] -= card.val;
-        log += ` ⚡スタン付与! ${card.val}ダメ`;
+        nextState[`${enemyPrefix}_hp`] -= (card.val * damageMultiplier);
+        log += ` ⚡スタン付与!`;
         triggerShake(enemyPrefix);
       }
       else if (card.effect === 'heal') {
-        let damage = card.val;
+        let damage = card.val * damageMultiplier;
         nextState[`${enemyPrefix}_hp`] -= damage;
         nextState[`${prefix}_hp`] += card.val;
         log += ` 🩸${damage}吸い取った!`;
@@ -232,13 +254,20 @@ function PvpBattleContent() {
         log += ` 🛡️ブロック+${card.val}`;
       } 
       else if (card.type === 'attack') {
-        let damage = card.val;
+        let damage = card.val * damageMultiplier;
         let targetBlock = nextState[`${enemyPrefix}_block`];
         let targetHp = nextState[`${enemyPrefix}_hp`];
+
+        if (targetBlock > 0 && damage > targetBlock) {
+           log += " 💥CRASH!!(脆弱)";
+           nextState[`${enemyPrefix}_vulnerable`] = true;
+        }
+
         if (targetBlock >= damage) {
           targetBlock -= damage; damage = 0; log += ' 🛡️防がれた！';
         } else {
-          damage -= targetBlock; targetBlock = 0; targetHp -= damage; log += ` ⚔️${damage}ダメージ！`;
+          damage -= targetBlock; targetBlock = 0; targetHp -= damage; 
+          log += ` ⚔️${damage}ダメージ！`;
           triggerShake(enemyPrefix);
           if (myRelic === 'vampire_fang') {
              nextState[`${prefix}_hp`] += 1;
@@ -250,7 +279,6 @@ function PvpBattleContent() {
       }
       
       nextState.last_action = log;
-      checkGameOver(nextState);
       await updateBoard(nextState);
     }, 200);
   };
@@ -263,22 +291,44 @@ function PvpBattleContent() {
     let nextState = JSON.parse(JSON.stringify(board));
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
-    let log = `🔥 ${myName}の必殺技！(精度${score}%)`;
+    
+    const isVulnerable = nextState[`${enemyPrefix}_vulnerable`];
+    const finalDamage = isVulnerable ? damage * 2 : damage;
+
+    let log = `🔥必殺！(${score}%)`;
     nextState[`${prefix}_special`] = 0;
-    nextState[`${enemyPrefix}_hp`] -= damage;
-    log += ` 💥ガード不能 ${damage}ダメージ！`;
+    nextState[`${enemyPrefix}_hp`] -= finalDamage;
+    log += ` 💥${finalDamage}ダメージ！`;
     triggerShake(enemyPrefix);
     nextState.last_action = log;
-    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
   const sendEmote = async (emote: string) => {
     if (!board) return;
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
-    await (supabase.from('battle_room') as any).update({ 
-      boardState: { ...board, [`${prefix}_emote`]: emote } 
-    }).eq('id', roomId);
+    await (supabase.from('battle_room') as any).update({ boardState: { ...board, [`${prefix}_emote`]: emote } }).eq('id', roomId);
+  };
+
+  const synthesizeHand = (hand: any[]) => {
+    const counts: any = {};
+    const newHand: any[] = [];
+    let synthesized = false;
+    hand.forEach(card => {
+      if (card.rank === 2 || card.id.startsWith('slot')) { newHand.push(card); return; }
+      if (!counts[card.name]) counts[card.name] = [];
+      counts[card.name].push(card);
+    });
+    Object.keys(counts).forEach(key => {
+      const cards = counts[key];
+      while (cards.length >= 2) {
+        const c1 = cards.pop(); const c2 = cards.pop();
+        const newCard = { ...c1, id: c1.id + '_plus', name: '★' + c1.name, val: Math.floor(c1.val * 1.5), cost: Math.max(0, c1.cost - 1), rank: 2, desc: `(合成) ${Math.floor(c1.val * 1.5)}効果 / コスト-1` };
+        newHand.push(newCard); synthesized = true;
+      }
+      while (cards.length > 0) newHand.push(cards.pop());
+    });
+    return { hand: newHand, synthesized };
   };
 
   const endTurn = async () => {
@@ -300,50 +350,44 @@ function PvpBattleContent() {
           if (enemyDiscard.length === 0) break;
           enemyDeck = shuffle(enemyDiscard);
           enemyDiscard = [];
-          nextState.last_action = 'デッキ再構築！';
         }
         enemyHand.push(enemyDeck.pop());
       }
     }
-    nextState[`${enemyPrefix}_deck`] = enemyDeck;
-    nextState[`${enemyPrefix}_discard`] = enemyDiscard;
+
+    const synResult = synthesizeHand(enemyHand);
+    enemyHand = synResult.hand;
     nextState[`${enemyPrefix}_hand`] = enemyHand;
 
-    let enemyEnergy = 3;
-    let enemyBlock = 0;
+    nextState.turn_count = (nextState.turn_count || 1) + 1;
+    if (nextState.turn_count % 5 === 0) {
+       const weathers = WEATHER_TYPES.filter(w => w !== nextState.weather);
+       nextState.weather = weathers[Math.floor(Math.random() * weathers.length)];
+    }
+
+    nextState[`${enemyPrefix}_energy`] = 3;
+    nextState[`${enemyPrefix}_block`] = 0;
+    nextState[`${enemyPrefix}_vulnerable`] = false;
+
     let log = '';
-    const enemyRelic = nextState[`${enemyPrefix}_relic`]; 
+    if (synResult.synthesized) log += ' 🧬カード合成!';
+    
+    if (nextState.weather === 'volcano') { nextState[`${enemyPrefix}_hp`] -= 2; nextState[`${prefix}_hp`] -= 2; log += ' 🔥火山ダメ'; }
+    else if (nextState.weather === 'sanctuary') { nextState[`${enemyPrefix}_hp`] += 2; log += ' ✨聖域回復'; }
+    else if (nextState.weather === 'storm') { enemyHand.forEach((c:any) => c.cost = Math.floor(Math.random() * 4)); log += ' 🌀暴風コスト変化'; }
 
-    if (enemyRelic === 'titan_shield') {
-      enemyBlock += 3;
-      log += ' 🛡️巨人の盾(+3)';
-    }
-    if (enemyRelic === 'energy_ring' && nextState[`${enemyPrefix}_hp`] <= 20) {
-      enemyEnergy += 1;
-      log += ' 💍活気の指輪(+1⚡)';
-    }
-
-    if (nextState[`${enemyPrefix}_stun`]) {
-      enemyEnergy = 1;
-      nextState[`${enemyPrefix}_stun`] = false;
-      log += ' ⚡スタンで動けない！';
-    }
-    nextState[`${enemyPrefix}_energy`] = enemyEnergy;
-    nextState[`${enemyPrefix}_block`] = enemyBlock;
+    if (nextState[`${enemyPrefix}_stun`]) { nextState[`${enemyPrefix}_energy`] = 1; nextState[`${enemyPrefix}_stun`] = false; log += ' ⚡スタン中'; }
 
     if ((nextState[`${enemyPrefix}_poison`] || 0) > 0) {
       const poisonDmg = nextState[`${enemyPrefix}_poison`];
       nextState[`${enemyPrefix}_hp`] -= poisonDmg;
-      log += ` ☠️毒で${poisonDmg}ダメ`;
       nextState[`${enemyPrefix}_poison`] = Math.max(0, poisonDmg - 1);
-      triggerShake(enemyPrefix);
+      log += ` ☠️毒${poisonDmg}`;
     }
     
-    if (log) nextState.last_action = log;
-    else nextState.last_action = `${myName} ターン終了`;
-
+    if (!log) log = `${myName} ターン終了`;
+    nextState.last_action = log;
     nextState.turn = enemyPrefix;
-    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
@@ -360,28 +404,49 @@ function PvpBattleContent() {
   const mySpecial = board[`${prefix}_special`] || 0;
   const myPoison = board[`${prefix}_poison`] || 0;
   const myStun = board[`${prefix}_stun`] || false;
+  const myVulnerable = board[`${prefix}_vulnerable`] || false;
   const myRelicId = board[`${prefix}_relic`]; 
   const enemyPoison = board[`${enemyPrefix}_poison`] || 0;
   const enemyStun = board[`${enemyPrefix}_stun`] || false;
+  const enemyVulnerable = board[`${enemyPrefix}_vulnerable`] || false;
   const enemyRelicId = board[`${enemyPrefix}_relic`]; 
+  const weather = board.weather || 'none';
+  const weatherIcon = weather === 'volcano' ? '🔥 火山' : weather === 'sanctuary' ? '✨ 聖域' : weather === 'storm' ? '🌀 暴風' : '';
 
-  const enemyAreaClass = `bg-red-900/20 p-4 rounded-xl border border-red-500/30 text-center relative mt-2 transition-all ${enemyPrefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${enemyPrefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
+  const enemyAreaClass = `bg-red-900/20 p-4 rounded-xl border border-red-500/30 text-center relative mt-2 transition-all 
+    ${enemyPrefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${enemyPrefix === 'p2' && shakeP2 ? 'animate-shake' : ''}
+    ${enemyVulnerable || breakAnim ? 'animate-break' : ''}`;
+
   const myAreaClass = `bg-blue-900/20 p-4 rounded-xl border border-blue-500/30 mb-2 transition-all ${prefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${prefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-2 flex flex-col justify-between select-none relative">
+      {/* 演出モーダル */}
       {showSlot && ( <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in"> <h2 className="text-4xl font-bold text-yellow-500 mb-8 animate-pulse">運命のルーレット...</h2> <div className="flex gap-4 bg-gray-800 p-8 rounded-xl border-4 border-yellow-600 shadow-[0_0_50px_gold]"> {reels.map((symbol, i) => <div key={i} className="w-24 h-32 bg-white text-black text-6xl flex items-center justify-center rounded border-4 border-gray-400 font-serif">{symbol}</div>)} </div> </div> )}
       {showMiniGame && ( <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center"> <div className="text-3xl font-bold mb-4 text-yellow-400 animate-pulse">タイミングを合わせろ！</div> <div className="w-80 h-10 bg-gray-700 rounded-full relative overflow-hidden border-4 border-white"> <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-10 bg-red-600/80 z-0"></div> <div className="absolute top-0 bottom-0 w-2 bg-yellow-400 z-10 shadow-[0_0_10px_yellow]" style={{ left: `${cursorPos}%` }} /> </div> <button onClick={executeUltimate} className="mt-8 px-10 py-6 bg-red-600 text-white text-3xl font-black rounded-full shadow-[0_0_20px_red] hover:scale-105 active:scale-95">STOP !</button> </div> )}
-      {result && ( <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in zoom-in"> <h1 className={`text-6xl font-bold mb-4 ${result === 'win' ? 'text-yellow-400' : 'text-blue-600'}`}>{result === 'win' ? 'VICTORY' : 'DEFEAT'}</h1> <button onClick={() => router.push('/pvp')} className="px-8 py-3 bg-white text-black font-bold rounded hover:scale-105 transition">ロビーへ</button> </div> )}
+      
+      {/* ★ リザルト画面 (z-index最強 & 強制遷移) */}
+      {result && ( 
+        <div className="absolute inset-0 bg-black/95 z-[9999] flex flex-col items-center justify-center animate-in fade-in zoom-in"> 
+          <h1 className={`text-6xl font-bold mb-4 ${result === 'win' ? 'text-yellow-400' : 'text-blue-600'}`}>{result === 'win' ? 'VICTORY' : 'DEFEAT'}</h1> 
+          <button onClick={goBackToLobby} className="px-8 py-3 bg-white text-black font-bold rounded hover:scale-105 transition cursor-pointer z-[10000]">ロビーへ</button> 
+        </div> 
+      )}
+
+      {weather !== 'none' && <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-1 rounded-full text-sm border border-white z-10">{weatherIcon}</div>}
 
       <div className={enemyAreaClass}>
         <div className="text-sm text-red-300">ENEMY ({board[`${enemyPrefix}_job`]})</div>
         {board[`${enemyPrefix}_emote`] && <div className="absolute -left-4 top-0 text-6xl animate-bounce drop-shadow-lg z-20">{board[`${enemyPrefix}_emote`]}</div>}
         {enemyRelicId && RELIC_DATA[enemyRelicId] && (<div className="absolute top-0 left-2 text-2xl" title={RELIC_DATA[enemyRelicId].desc}>{RELIC_DATA[enemyRelicId].icon}</div>)}
-        <div className="text-4xl font-bold flex justify-center items-center gap-2"> {Math.max(0, board[`${enemyPrefix}_hp`])} HP {enemyPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{enemyPoison}</span>} {enemyStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>} </div>
+        <div className="text-4xl font-bold flex justify-center items-center gap-2">
+          {Math.max(0, board[`${enemyPrefix}_hp`])} HP
+          {enemyPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{enemyPoison}</span>}
+          {enemyStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+          {enemyVulnerable && <span className="text-sm bg-red-600 px-2 rounded animate-pulse">💔脆弱</span>}
+        </div>
         {board[`${enemyPrefix}_block`] > 0 && <div className="absolute top-4 right-4 bg-blue-600 px-3 py-1 rounded-full font-bold">🛡️ {board[`${enemyPrefix}_block`]}</div>}
         <div className="flex justify-center gap-1 mt-2">{[...Array(3)].map((_, i) => <div key={i} className={`w-3 h-3 rounded-full ${i < board[`${enemyPrefix}_energy`] ? 'bg-yellow-600' : 'bg-gray-700'}`} />)}</div>
-        <div className="w-1/2 mx-auto h-1 bg-gray-800 mt-2 rounded"><div className="h-full bg-purple-500 transition-all" style={{ width: `${board[`${enemyPrefix}_special`] || 0}%` }} /></div>
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center gap-2">
@@ -395,7 +460,13 @@ function PvpBattleContent() {
           <div>
             <div className="text-sm text-blue-300">YOU ({myName})</div>
             {myRelicId && RELIC_DATA[myRelicId] && ( <div className="flex items-center gap-2 mb-1" title={RELIC_DATA[myRelicId].desc}> <span className="text-2xl">{RELIC_DATA[myRelicId].icon}</span> <span className="text-xs text-gray-300">{RELIC_DATA[myRelicId].desc.slice(0, 10)}...</span> </div> )}
-            <div className="text-3xl font-bold flex items-center gap-2"> {Math.max(0, board[`${prefix}_hp`])} HP {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>} {myPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{myPoison}</span>} {myStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>} </div>
+            <div className="text-3xl font-bold flex items-center gap-2">
+              {Math.max(0, board[`${prefix}_hp`])} HP
+              {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>}
+              {myPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{myPoison}</span>}
+              {myStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+              {myVulnerable && <span className="text-sm bg-red-600 px-2 rounded animate-pulse">💔脆弱</span>}
+            </div>
             <div className="flex items-center gap-2 mt-2">
               <div className="text-xs font-bold text-purple-400">LIMIT</div>
               <div className="w-32 h-4 bg-gray-800 rounded relative border border-gray-600 overflow-hidden"> <div className={`h-full transition-all duration-300 ${mySpecial >= 100 ? 'bg-purple-500 animate-pulse shadow-[0_0_10px_purple]' : 'bg-purple-900'}`} style={{ width: `${mySpecial}%` }} /> </div>
@@ -407,8 +478,13 @@ function PvpBattleContent() {
         <div className="flex gap-2 overflow-x-auto pb-2 min-h-[140px] items-end">
           {myHand.map((card: any, index: number) => {
             const isRare = card.id.startsWith('slot') || card.id === 'm-fire';
+            const isRankUp = card.rank === 2;
             return (
-            <button key={`${card.id}-${index}`} onClick={() => playCard(card, index)} disabled={!isMyTurn || board[`${prefix}_energy`] < card.cost || result !== null} className={`flex-shrink-0 w-24 h-32 rounded-lg border-2 flex flex-col items-center justify-between p-1 transition-all relative ${isRare ? 'holo-card-bg' : ''} ${!isMyTurn || result ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : isRare ? '' : card.effect === 'poison' ? 'bg-purple-950 border-purple-400' : card.effect === 'stun' ? 'bg-yellow-950 border-yellow-400' : card.type === 'attack' ? 'bg-red-950 border-red-500 hover:-translate-y-2' : 'bg-blue-950 border-blue-400 hover:-translate-y-2'}`}>
+            <button key={`${card.id}-${index}`} onClick={() => playCard(card, index)} disabled={!isMyTurn || board[`${prefix}_energy`] < card.cost || result !== null}
+              className={`flex-shrink-0 w-24 h-32 rounded-lg border-2 flex flex-col items-center justify-between p-1 transition-all relative 
+              ${isRare ? 'holo-card-bg' : ''} 
+              ${isRankUp ? 'rank-up-card' : ''} 
+              ${!isMyTurn || result ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : isRare ? '' : card.effect === 'poison' ? 'bg-purple-950 border-purple-400' : card.effect === 'stun' ? 'bg-yellow-950 border-yellow-400' : card.type === 'attack' ? 'bg-red-950 border-red-500 hover:-translate-y-2' : 'bg-blue-950 border-blue-400 hover:-translate-y-2'}`}>
               <div className="absolute -top-2 -left-2 w-6 h-6 bg-yellow-500 text-black rounded-full flex items-center justify-center font-bold text-xs border border-white">{card.cost}</div>
               <div className="font-bold text-xs mt-2 z-10">{card.name}</div>
               <div className="text-[10px] text-gray-300 text-center leading-tight z-10">{card.desc}</div>
@@ -421,7 +497,6 @@ function PvpBattleContent() {
   );
 }
 
-// ★ Suspenseでラップ (これでエラー解決！)
 export default function PvpBattle() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center">Loading...</div>}>
