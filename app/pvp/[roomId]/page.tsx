@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 // ユーティリティ & 定数
 // ------------------------------------
 const shuffle = (array: any[]) => {
-  const newArr = [...array];
+  const newArr = JSON.parse(JSON.stringify(array));
   for (let i = newArr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
@@ -22,13 +22,13 @@ export default function PvpBattle() {
   const { roomId } = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const myRole = searchParams.get('player'); // "p1" or "p2"
+  const myRole = searchParams.get('player'); 
   const myName = searchParams.get('name');
   
   const [board, setBoard] = useState<any>(null);
   const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
-  // 演出用ステート
+  // 演出用
   const [shakeP1, setShakeP1] = useState(false);
   const [shakeP2, setShakeP2] = useState(false);
   const [showMiniGame, setShowMiniGame] = useState(false);
@@ -36,6 +36,8 @@ export default function PvpBattle() {
   const [moveDirection, setMoveDirection] = useState(1);
   const [showSlot, setShowSlot] = useState(false);
   const [reels, setReels] = useState(['❓', '❓', '❓']);
+
+  const prevHpRef = useRef({ p1: 50, p2: 50 });
 
   // --- 必殺技ミニゲームループ ---
   useEffect(() => {
@@ -70,7 +72,6 @@ export default function PvpBattle() {
       clearInterval(interval);
       const rand = Math.random() * 100;
       let finalReels = [];
-      // 確変モード: 777(5%), 💀(10%)
       if (rand < 5) finalReels = ['7️⃣', '7️⃣', '7️⃣']; 
       else if (rand < 15) finalReels = ['💀', '💀', '💀']; 
       else if (rand < 30) finalReels = ['🍒', '🍒', '🍒']; 
@@ -81,6 +82,7 @@ export default function PvpBattle() {
           REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
           REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)]
         ];
+        // 3つ揃ってたらハズレ用にずらす
         if (finalReels[0] === finalReels[1] && finalReels[1] === finalReels[2]) {
           finalReels[2] = finalReels[0] === '7️⃣' ? '💀' : '7️⃣';
         }
@@ -92,8 +94,14 @@ export default function PvpBattle() {
   };
 
   const applySlotEffect = async (finalReels: string[]) => {
-    if (!board) return;
-    let nextState = JSON.parse(JSON.stringify(board));
+    // ★重要修正：ここです！
+    // スロットが回っている間に時間が経過しているため、
+    // ローカルの "board" ではなく、必ずサーバーから「最新の状態」を取得して計算します。
+    // そうしないと、消費したエナジーが元に戻ってしまいます。
+    const { data } = await (supabase.from('battle_room') as any).select('boardState').eq('id', roomId).single();
+    if (!data) return;
+
+    let nextState = data.boardState; // 最新データを取得
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
     let log = '';
@@ -110,6 +118,8 @@ export default function PvpBattle() {
       log = '🎰 ハズレ... 5ダメージ'; nextState[`${prefix}_hp`] -= 5;
     }
     nextState.last_action = log;
+    
+    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
@@ -118,7 +128,10 @@ export default function PvpBattle() {
     const fetchInitial = async () => {
       if (!roomId) return;
       const { data } = await (supabase.from('battle_room') as any).select('*').eq('id', roomId as string).single();
-      if (data) setBoard(data.boardState);
+      if (data) {
+        setBoard(data.boardState);
+        prevHpRef.current = { p1: data.boardState.p1_hp, p2: data.boardState.p2_hp };
+      }
     };
     fetchInitial();
 
@@ -126,16 +139,15 @@ export default function PvpBattle() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'battle_room', filter: `id=eq.${roomId}` }, 
       (payload) => {
         const newState = (payload.new as any).boardState;
-        if (board) {
-          if (newState.p1_hp < board.p1_hp) triggerShake('p1');
-          if (newState.p2_hp < board.p2_hp) triggerShake('p2');
-        }
+        if (newState.p1_hp < prevHpRef.current.p1) triggerShake('p1');
+        if (newState.p2_hp < prevHpRef.current.p2) triggerShake('p2');
+        prevHpRef.current = { p1: newState.p1_hp, p2: newState.p2_hp };
         setBoard(newState);
         checkGameOver(newState);
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [roomId, board]);
+  }, [roomId]);
 
   const triggerShake = (target: 'p1' | 'p2') => {
     if (target === 'p1') { setShakeP1(true); setTimeout(() => setShakeP1(false), 500); }
@@ -143,12 +155,21 @@ export default function PvpBattle() {
   };
 
   const checkGameOver = (state: any) => {
-    if (!state) return;
-    if (state.p1_hp <= 0) myRole === 'p1' ? handleDefeat() : handleVictory();
-    else if (state.p2_hp <= 0) myRole === 'p2' ? handleDefeat() : handleVictory();
+    if (!state || result) return;
+    if (state.p1_hp <= 0) {
+      if (myRole === 'p1') handleDefeat(); else handleVictory();
+    } 
+    else if (state.p2_hp <= 0) {
+      if (myRole === 'p2') handleDefeat(); else handleVictory();
+    }
   };
-  const handleVictory = async () => { if (!result) { setResult('win'); await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); } };
-  const handleDefeat = () => { if (!result) setResult('lose'); };
+
+  const handleVictory = async () => { 
+    setResult('win'); 
+    await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); 
+  };
+  
+  const handleDefeat = () => { setResult('lose'); };
 
   // --- カード使用 ---
   const playCard = async (card: any, index: number) => {
@@ -159,14 +180,19 @@ export default function PvpBattle() {
     // スロット
     if (card.id.startsWith('slot')) {
        let nextState = JSON.parse(JSON.stringify(board));
+       // ★ここでエナジーを減らす
        nextState[`${prefix}_energy`] -= card.cost;
        const usedCard = nextState[`${prefix}_hand`].splice(index, 1)[0];
        nextState[`${prefix}_discard`].push(usedCard);
+       
+       // エナジー消費を即座に保存
        await updateBoard(nextState);
+       // その後スロット開始
        startSlotMachine();
        return;
     }
 
+    // 通常カード
     setTimeout(async () => {
       let nextState = JSON.parse(JSON.stringify(board));
       const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
@@ -177,19 +203,17 @@ export default function PvpBattle() {
       nextState[`${prefix}_discard`].push(usedCard);
       nextState[`${prefix}_special`] = Math.min(100, (nextState[`${prefix}_special`] || 0) + 20);
 
-      // ★効果分岐 (状態異常など)
       if (card.effect === 'poison') {
         nextState[`${enemyPrefix}_poison`] = (nextState[`${enemyPrefix}_poison`] || 0) + card.val;
         log += ` ☠️相手に毒${card.val}!`;
       } 
       else if (card.effect === 'stun') {
         nextState[`${enemyPrefix}_stun`] = true;
-        nextState[`${enemyPrefix}_hp`] -= card.val; // ダメージも入る
+        nextState[`${enemyPrefix}_hp`] -= card.val;
         log += ` ⚡スタン付与! ${card.val}ダメ`;
         triggerShake(enemyPrefix);
       }
       else if (card.effect === 'heal') {
-        // ドレインなど
         let damage = card.val;
         nextState[`${enemyPrefix}_hp`] -= damage;
         nextState[`${prefix}_hp`] += card.val;
@@ -215,17 +239,20 @@ export default function PvpBattle() {
       }
       
       nextState.last_action = log;
+      checkGameOver(nextState);
       await updateBoard(nextState);
     }, 200);
   };
 
-  // --- 必殺技 (ミニゲーム結果) ---
   const executeUltimate = async () => {
     setShowMiniGame(false);
     const distance = Math.abs(50 - cursorPos);
     const score = Math.max(0, 100 - (distance * 2)); 
     const damage = Math.floor((score / 100) * 40) + 10;
 
+    // 必殺技も時間経過があるので、念のため最新stateを取るのが安全だが
+    // 今回はスロットほど時間がかからないのでlocal stateでもギリギリOK。
+    // でも安全策でfetchするパターンに統一しても良い。今回はそのまま。
     let nextState = JSON.parse(JSON.stringify(board));
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
@@ -233,78 +260,67 @@ export default function PvpBattle() {
     let log = `🔥 ${myName}の必殺技！(精度${score}%)`;
     nextState[`${prefix}_special`] = 0;
     
-    // 必殺技はブロック無視にしてみる（脳汁強化）
     nextState[`${enemyPrefix}_hp`] -= damage;
     log += ` 💥ガード不能 ${damage}ダメージ！`;
     triggerShake(enemyPrefix);
 
     nextState.last_action = log;
+    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
-  // --- エモート送信 ---
   const sendEmote = async (emote: string) => {
     if (!board) return;
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
-    // DBの p1_emote / p2_emote を更新
     await (supabase.from('battle_room') as any).update({ 
       boardState: { ...board, [`${prefix}_emote`]: emote } 
     }).eq('id', roomId);
-    
-    // 3秒後に消す
-    setTimeout(async () => {
-      // 最新のboardを取得し直さないと上書きしてしまうため、ここは簡易的に
-      // 本当はよくないが、エモートは消えなくても次の上書きで消えるのでOKとする
-    }, 3000);
   };
 
-  // --- ターン終了処理 (状態異常の処理もここ！) ---
   const endTurn = async () => {
     if (!board || board.turn !== myRole) return;
     let nextState = JSON.parse(JSON.stringify(board));
     const prefix = myRole === 'p1' ? 'p1' : 'p2';
     const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
     
-    // 1. 手札破棄
     nextState[`${prefix}_discard`].push(...nextState[`${prefix}_hand`]);
     nextState[`${prefix}_hand`] = [];
 
-    // 2. 相手のドロー
     let enemyDeck = nextState[`${enemyPrefix}_deck`];
     let enemyDiscard = nextState[`${enemyPrefix}_discard`];
-    let enemyHand = [];
-    for (let i = 0; i < 5; i++) {
-      if (enemyDeck.length === 0) {
-        if (enemyDiscard.length === 0) break;
-        enemyDeck = shuffle(enemyDiscard);
-        enemyDiscard = [];
-        nextState.last_action = 'デッキ再構築！';
+    let enemyHand = nextState[`${enemyPrefix}_hand`] || [];
+    if (enemyHand.length < 5) {
+      const drawCount = 5 - enemyHand.length;
+      for (let i = 0; i < drawCount; i++) {
+        if (enemyDeck.length === 0) {
+          if (enemyDiscard.length === 0) break;
+          enemyDeck = shuffle(enemyDiscard);
+          enemyDiscard = [];
+          nextState.last_action = 'デッキ再構築！';
+        }
+        enemyHand.push(enemyDeck.pop());
       }
-      enemyHand.push(enemyDeck.pop());
     }
     nextState[`${enemyPrefix}_deck`] = enemyDeck;
     nextState[`${enemyPrefix}_discard`] = enemyDiscard;
     nextState[`${enemyPrefix}_hand`] = enemyHand;
 
-    // 3. ★状態異常処理 (相手のターンの準備)
+    // 状態異常
     let enemyEnergy = 3;
     let log = '';
 
-    // スタン判定
     if (nextState[`${enemyPrefix}_stun`]) {
-      enemyEnergy = 1; // スタンならエナジー1
-      nextState[`${enemyPrefix}_stun`] = false; // スタン解除
+      enemyEnergy = 1;
+      nextState[`${enemyPrefix}_stun`] = false;
       log += ' ⚡スタンで動けない！';
     }
     nextState[`${enemyPrefix}_energy`] = enemyEnergy;
     nextState[`${enemyPrefix}_block`] = 0;
 
-    // 毒ダメージ (ターン開始時ダメージ)
     if ((nextState[`${enemyPrefix}_poison`] || 0) > 0) {
       const poisonDmg = nextState[`${enemyPrefix}_poison`];
       nextState[`${enemyPrefix}_hp`] -= poisonDmg;
       log += ` ☠️毒で${poisonDmg}ダメ`;
-      // 毒を1減らす（自然治癒）
       nextState[`${enemyPrefix}_poison`] = Math.max(0, poisonDmg - 1);
       triggerShake(enemyPrefix);
     }
@@ -313,6 +329,7 @@ export default function PvpBattle() {
     else nextState.last_action = `${myName} ターン終了`;
 
     nextState.turn = enemyPrefix;
+    checkGameOver(nextState);
     await updateBoard(nextState);
   };
 
@@ -338,7 +355,6 @@ export default function PvpBattle() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-2 flex flex-col justify-between select-none relative">
       
-      {/* 🎰 スロット演出 */}
       {showSlot && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in">
           <h2 className="text-4xl font-bold text-yellow-500 mb-8 animate-pulse">運命のルーレット...</h2>
@@ -348,7 +364,6 @@ export default function PvpBattle() {
         </div>
       )}
 
-      {/* 🔥 ミニゲーム */}
       {showMiniGame && (
         <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center">
           <div className="text-3xl font-bold mb-4 text-yellow-400 animate-pulse">タイミングを合わせろ！</div>
@@ -360,93 +375,65 @@ export default function PvpBattle() {
         </div>
       )}
 
-      {/* 勝敗 */}
       {result && (
-        <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center">
+        <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in zoom-in">
           <h1 className={`text-6xl font-bold mb-4 ${result === 'win' ? 'text-yellow-400' : 'text-blue-600'}`}>{result === 'win' ? 'VICTORY' : 'DEFEAT'}</h1>
-          <button onClick={() => router.push('/pvp')} className="px-8 py-3 bg-white text-black font-bold rounded">ロビーへ</button>
+          <button onClick={() => router.push('/pvp')} className="px-8 py-3 bg-white text-black font-bold rounded hover:scale-105 transition">ロビーへ</button>
         </div>
       )}
 
-      {/* --- 敵エリア --- */}
       <div className={enemyAreaClass}>
         <div className="text-sm text-red-300">ENEMY ({board[`${enemyPrefix}_job`]})</div>
-        
-        {/* エモート表示 (敵) */}
-        {board[`${enemyPrefix}_emote`] && (
-          <div className="absolute -left-4 top-0 text-6xl animate-bounce drop-shadow-lg z-20">
-            {board[`${enemyPrefix}_emote`]}
-          </div>
-        )}
-
+        {board[`${enemyPrefix}_emote`] && <div className="absolute -left-4 top-0 text-6xl animate-bounce drop-shadow-lg z-20">{board[`${enemyPrefix}_emote`]}</div>}
         <div className="text-4xl font-bold flex justify-center items-center gap-2">
-          {board[`${enemyPrefix}_hp`]} HP
+          {Math.max(0, board[`${enemyPrefix}_hp`])} HP
           {enemyPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{enemyPoison}</span>}
           {enemyStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
         </div>
-        
         {board[`${enemyPrefix}_block`] > 0 && <div className="absolute top-4 right-4 bg-blue-600 px-3 py-1 rounded-full font-bold">🛡️ {board[`${enemyPrefix}_block`]}</div>}
-        <div className="flex justify-center gap-1 mt-2">
-           {[...Array(3)].map((_, i) => <div key={i} className={`w-3 h-3 rounded-full ${i < board[`${enemyPrefix}_energy`] ? 'bg-yellow-600' : 'bg-gray-700'}`} />)}
-        </div>
+        <div className="flex justify-center gap-1 mt-2">{[...Array(3)].map((_, i) => <div key={i} className={`w-3 h-3 rounded-full ${i < board[`${enemyPrefix}_energy`] ? 'bg-yellow-600' : 'bg-gray-700'}`} />)}</div>
         <div className="w-1/2 mx-auto h-1 bg-gray-800 mt-2 rounded"><div className="h-full bg-purple-500 transition-all" style={{ width: `${board[`${enemyPrefix}_special`] || 0}%` }} /></div>
       </div>
 
-      {/* --- ログ & ターン終了 --- */}
       <div className="flex-1 flex flex-col items-center justify-center gap-2">
         <div className="text-yellow-400 font-bold animate-pulse text-center px-4 h-8">{board.last_action}</div>
-        <button onClick={endTurn} disabled={!isMyTurn}
-          className={`px-8 py-3 rounded-full font-bold shadow-lg transition-all ${isMyTurn ? 'bg-blue-600 hover:scale-110 text-white' : 'bg-gray-700 text-gray-500 opacity-50'}`}>
+        <button onClick={endTurn} disabled={!isMyTurn || result !== null}
+          className={`px-8 py-3 rounded-full font-bold shadow-lg transition-all ${isMyTurn && !result ? 'bg-blue-600 hover:scale-110 text-white' : 'bg-gray-700 text-gray-500 opacity-50'}`}>
           {isMyTurn ? 'ターン終了' : '相手のターン...'}
         </button>
       </div>
 
-      {/* --- 自分エリア --- */}
       <div className={myAreaClass}>
         <div className="flex justify-between items-center mb-2 px-2 relative">
-          
-          {/* エモート表示 (自分) */}
-          {board[`${prefix}_emote`] && (
-            <div className="absolute -right-2 -top-10 text-6xl animate-bounce drop-shadow-lg z-20">
-              {board[`${prefix}_emote`]}
-            </div>
-          )}
-
+          {board[`${prefix}_emote`] && <div className="absolute -right-2 -top-10 text-6xl animate-bounce drop-shadow-lg z-20">{board[`${prefix}_emote`]}</div>}
           <div>
             <div className="text-sm text-blue-300">YOU ({myName})</div>
             <div className="text-3xl font-bold flex items-center gap-2">
-              {board[`${prefix}_hp`]} HP
+              {Math.max(0, board[`${prefix}_hp`])} HP
               {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>}
               {myPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{myPoison}</span>}
               {myStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
             </div>
-            
             <div className="flex items-center gap-2 mt-2">
               <div className="text-xs font-bold text-purple-400">LIMIT</div>
               <div className="w-32 h-4 bg-gray-800 rounded relative border border-gray-600 overflow-hidden">
                 <div className={`h-full transition-all duration-300 ${mySpecial >= 100 ? 'bg-purple-500 animate-pulse shadow-[0_0_10px_purple]' : 'bg-purple-900'}`} style={{ width: `${mySpecial}%` }} />
               </div>
-              {mySpecial >= 100 && isMyTurn && (
+              {mySpecial >= 100 && isMyTurn && !result && (
                 <button onClick={() => setShowMiniGame(true)} className="px-3 py-1 bg-purple-600 text-white font-bold text-xs rounded animate-bounce shadow-[0_0_15px_purple] hover:scale-110">🔥必殺!</button>
               )}
             </div>
           </div>
-
-          {/* エモートボタン */}
           <div className="flex gap-1 absolute bottom-full right-0 mb-2">
-             {EMOTES.map(e => (
-               <button key={e} onClick={() => sendEmote(e)} className="text-xl bg-gray-800 hover:bg-gray-700 rounded p-1 shadow border border-gray-600">{e}</button>
-             ))}
+             {EMOTES.map(e => <button key={e} onClick={() => sendEmote(e)} className="text-xl bg-gray-800 hover:bg-gray-700 rounded p-1 shadow border border-gray-600">{e}</button>)}
           </div>
-
         </div>
 
-        {/* 手札リスト */}
         <div className="flex gap-2 overflow-x-auto pb-2 min-h-[140px] items-end">
           {myHand.map((card: any, index: number) => (
-            <button key={`${card.id}-${index}`} onClick={() => playCard(card, index)} disabled={!isMyTurn || board[`${prefix}_energy`] < card.cost}
+            <button key={`${card.id}-${index}`} onClick={() => playCard(card, index)} disabled={!isMyTurn || board[`${prefix}_energy`] < card.cost || result !== null}
               className={`flex-shrink-0 w-24 h-32 rounded-lg border-2 flex flex-col items-center justify-between p-1 transition-all relative 
-              ${!isMyTurn ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : 
+              ${!isMyTurn || result ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : 
                 card.id.startsWith('slot') ? 'bg-purple-900 border-yellow-400 animate-pulse shadow-[0_0_10px_purple]' : 
                 card.effect === 'poison' ? 'bg-purple-950 border-purple-400' :
                 card.effect === 'stun' ? 'bg-yellow-950 border-yellow-400' :

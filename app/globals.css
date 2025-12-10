@@ -56,3 +56,24 @@ body {
   pointer-events: none; /* アニメーション中はクリック不可にする */
   z-index: 50; /* 他のカードより前に出す */
 }
+
+/* app/globals.css の一番下に追加 */
+
+/* --- ホログラム（キラカード）アニメーション --- */
+@keyframes holo-shimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.holo-card-bg {
+  /* 虹色のグラデーション背景 */
+  background: linear-gradient(
+    135deg, 
+    #ff000044, #ffff0044, #00ff0044, #00ffff44, #0000ff44, #ff00ff44, #ff000044
+  );
+  background-size: 400% 400%;
+  animation: holo-shimmer 3s ease infinite;
+  border-color: #ffd700 !important; /* 枠を金色に */
+  box-shadow: 0 0 15px rgba(255, 215, 0, 0.5) !important;
+}

@@ -1,180 +1,477 @@
 'use client';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useRef } from 'react';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-// ------------------------------------------------
-// 🎴 ジョブごとのデッキ定義
-// ------------------------------------------------
-const JOB_DECKS: any = {
-  warrior: [
-    { id: 'w-bash', name: 'シールドバッシュ', val: 5, cost: 2, type: 'attack', effect: 'stun', desc: '5ダメ+スタン(次ターンEN減)' },
-    { id: 'w-smash', name: '強打', val: 12, cost: 2, type: 'attack', desc: '12ダメージ' },
-    { id: 'atk-1', name: '斬撃', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-    { id: 'atk-2', name: '斬撃', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-    { id: 'def-1', name: '鉄壁', val: 10, cost: 2, type: 'skill', desc: 'ブロック+10' },
-    { id: 'def-2', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-    { id: 'def-3', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-  ],
-  mage: [
-    { id: 'm-poison', name: '毒の霧', val: 3, cost: 1, type: 'skill', effect: 'poison', desc: '毒+3 (毎ターンDmg)' },
-    { id: 'm-fire', name: 'ファイア', val: 15, cost: 2, type: 'attack', desc: '15ダメージ' },
-    { id: 'm-drain', name: 'ドレイン', val: 5, cost: 1, type: 'attack', effect: 'heal', desc: '5ダメ+5回復' },
-    { id: 'atk-1', name: '杖攻撃', val: 4, cost: 1, type: 'attack', desc: '4ダメージ' },
-    { id: 'def-1', name: '魔法バリア', val: 8, cost: 2, type: 'skill', desc: 'ブロック+8' },
-    { id: 'def-2', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-    { id: 'def-3', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-  ],
-  gambler: [
-    { id: 'slot-1', name: '運命のスロット', val: 0, cost: 0, type: 'skill', desc: '777で即死、💀で破滅' },
-    { id: 'slot-2', name: '運命のスロット', val: 0, cost: 0, type: 'skill', desc: '777で即死、💀で破滅' },
-    { id: 'atk-1', name: 'ストライク', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-    { id: 'atk-2', name: 'ストライク', val: 6, cost: 1, type: 'attack', desc: '6ダメージ' },
-    { id: 'def-1', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-    { id: 'def-2', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-    { id: 'def-3', name: '防御', val: 5, cost: 1, type: 'skill', desc: 'ブロック+5' },
-  ]
+// ------------------------------------
+// ユーティリティ & 定数
+// ------------------------------------
+const shuffle = (array: any[]) => {
+  const newArr = JSON.parse(JSON.stringify(array));
+  for (let i = newArr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
+  }
+  return newArr;
 };
 
-export default function PvpLobby() {
+const REEL_SYMBOLS = ['7️⃣', '💀', '🍒', '⚔️'];
+const EMOTES = ['😎', '😱', '😡', '🙏', '👍', '🤔'];
+
+// ★レリックのデータ（表示用）
+const RELIC_DATA: any = {
+  vampire_fang: { icon: '🧛', desc: '攻撃でダメージを与えるとHPが1回復' },
+  titan_shield: { icon: '🛡️', desc: 'ターン開始時にブロック+3' },
+  energy_ring: { icon: '💍', desc: 'HPが20以下の時、ターン開始時のエナジー+1' },
+  lucky_coin: { icon: '🪙', desc: 'スロットで777が出る確率が2倍になる' },
+};
+
+export default function PvpBattle() {
+  const { roomId } = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const [roomId, setRoomId] = useState('');
-  const [playerName, setPlayerName] = useState('');
-  const [selectedJob, setSelectedJob] = useState<'warrior' | 'mage' | 'gambler'>('warrior');
+  const myRole = searchParams.get('player'); 
+  const myName = searchParams.get('name');
+  
+  const [board, setBoard] = useState<any>(null);
+  const [result, setResult] = useState<'win' | 'lose' | null>(null);
 
-  // シャッフル関数
-  const shuffle = (array: any[]) => {
-    const newArr = [...array];
-    for (let i = newArr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
+  // 演出用
+  const [shakeP1, setShakeP1] = useState(false);
+  const [shakeP2, setShakeP2] = useState(false);
+  const [showMiniGame, setShowMiniGame] = useState(false);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [moveDirection, setMoveDirection] = useState(1);
+  const [showSlot, setShowSlot] = useState(false);
+  const [reels, setReels] = useState(['❓', '❓', '❓']);
+
+  const prevHpRef = useRef({ p1: 50, p2: 50 });
+
+  // --- 必殺技ミニゲームループ ---
+  useEffect(() => {
+    let interval: any;
+    if (showMiniGame) {
+      interval = setInterval(() => {
+        setCursorPos((prev) => {
+          let next = prev + (3 * moveDirection);
+          if (next >= 100) { next = 100; setMoveDirection(-1); }
+          if (next <= 0) { next = 0; setMoveDirection(1); }
+          return next;
+        });
+      }, 10);
     }
-    return newArr;
+    return () => clearInterval(interval);
+  }, [showMiniGame, moveDirection]);
+
+  // --- スロットロジック ---
+  const startSlotMachine = async () => {
+    setShowSlot(true);
+    let spinCount = 0;
+    const interval = setInterval(() => {
+      setReels([
+        REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
+        REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
+        REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)]
+      ]);
+      spinCount++;
+    }, 50);
+
+    setTimeout(async () => {
+      clearInterval(interval);
+      const rand = Math.random() * 100;
+      let finalReels = [];
+      
+      // ★レリック効果：幸運のコインを持っているかチェック
+      const prefix = myRole === 'p1' ? 'p1' : 'p2';
+      const myRelic = board[`${prefix}_relic`];
+      const jackpotChance = myRelic === 'lucky_coin' ? 10 : 5; // 持ってたら確率2倍(10%)
+
+      if (rand < jackpotChance) finalReels = ['7️⃣', '7️⃣', '7️⃣']; 
+      else if (rand < 15) finalReels = ['💀', '💀', '💀']; 
+      else if (rand < 30) finalReels = ['🍒', '🍒', '🍒']; 
+      else if (rand < 50) finalReels = ['⚔️', '⚔️', '⚔️']; 
+      else {
+        finalReels = [
+          REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
+          REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)],
+          REEL_SYMBOLS[Math.floor(Math.random() * REEL_SYMBOLS.length)]
+        ];
+        if (finalReels[0] === finalReels[1] && finalReels[1] === finalReels[2]) {
+          finalReels[2] = finalReels[0] === '7️⃣' ? '💀' : '7️⃣';
+        }
+      }
+      setReels(finalReels);
+      await applySlotEffect(finalReels);
+      setTimeout(() => setShowSlot(false), 2000);
+    }, 2000);
   };
 
-  const createRoom = async () => {
-    if (!roomId || !playerName) return alert('全て入力してください');
+  const applySlotEffect = async (finalReels: string[]) => {
+    const { data } = await (supabase.from('battle_room') as any).select('boardState').eq('id', roomId).single();
+    if (!data) return;
+    let nextState = data.boardState;
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
+    let log = '';
 
-    // 選んだジョブのデッキを使う
-    const myDeckFull = shuffle([...JOB_DECKS[selectedJob]]);
-    
-    // 相手のデッキは仮で戦士にしておく（相手が入室時に上書きされる）
-    const dummyDeck = shuffle([...JOB_DECKS['warrior']]);
+    if (finalReels[0] === '7️⃣' && finalReels[1] === '7️⃣' && finalReels[2] === '7️⃣') {
+      log = '🎰 JACKPOT!! 100ダメージ!!'; nextState[`${enemyPrefix}_hp`] -= 100;
+    } else if (finalReels[0] === '💀' && finalReels[1] === '💀' && finalReels[2] === '💀') {
+      log = '🎰 💀破滅... HPが1になった'; nextState[`${prefix}_hp`] = 1;
+    } else if (finalReels[0] === '🍒' && finalReels[1] === '🍒' && finalReels[2] === '🍒') {
+      log = '🎰 大当たり！全回復！'; nextState[`${prefix}_hp`] = 50;
+    } else if (finalReels[0] === '⚔️' && finalReels[1] === '⚔️' && finalReels[2] === '⚔️') {
+      log = '🎰 スリーソード！20ダメージ！'; nextState[`${enemyPrefix}_hp`] -= 20;
+    } else {
+      log = '🎰 ハズレ... 5ダメージ'; nextState[`${prefix}_hp`] -= 5;
+    }
+    nextState.last_action = log;
+    checkGameOver(nextState);
+    await updateBoard(nextState);
+  };
 
-    const initialState = {
-      turn: 'p1', last_action: 'ゲーム開始',
-      
-      // Player 1 (自分)
-      p1_name: playerName,
-      p1_job: selectedJob,
-      p1_hp: 50, p1_energy: 3, p1_block: 0, p1_special: 0,
-      p1_poison: 0, p1_stun: false, p1_emote: '', // ★状態異常・エモート追加
-      p1_deck: myDeckFull, p1_hand: myDeckFull.splice(0, 5), p1_discard: [],
-      
-      // Player 2 (相手)
-      p2_name: 'Waiting...',
-      p2_job: 'warrior', // 仮
-      p2_hp: 50, p2_energy: 3, p2_block: 0, p2_special: 0,
-      p2_poison: 0, p2_stun: false, p2_emote: '',
-      p2_deck: dummyDeck, p2_hand: dummyDeck.splice(0, 5), p2_discard: [],
+  // --- Realtime Setup ---
+  useEffect(() => {
+    const fetchInitial = async () => {
+      if (!roomId) return;
+      const { data } = await (supabase.from('battle_room') as any).select('*').eq('id', roomId as string).single();
+      if (data) {
+        setBoard(data.boardState);
+        prevHpRef.current = { p1: data.boardState.p1_hp, p2: data.boardState.p2_hp };
+      }
     };
+    fetchInitial();
 
-    const { error } = await (supabase.from('battle_room') as any).insert({
-      id: roomId, player1: playerName, boardState: initialState
-    });
+    const channel = supabase.channel(`room-${roomId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'battle_room', filter: `id=eq.${roomId}` }, 
+      (payload) => {
+        const newState = (payload.new as any).boardState;
+        if (newState.p1_hp < prevHpRef.current.p1) triggerShake('p1');
+        if (newState.p2_hp < prevHpRef.current.p2) triggerShake('p2');
+        prevHpRef.current = { p1: newState.p1_hp, p2: newState.p2_hp };
+        setBoard(newState);
+        checkGameOver(newState);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [roomId]);
 
-    if (error) alert('エラー: ' + error.message);
-    else router.push(`/pvp/${roomId}?player=p1&name=${playerName}`);
+  const triggerShake = (target: 'p1' | 'p2') => {
+    if (target === 'p1') { setShakeP1(true); setTimeout(() => setShakeP1(false), 500); }
+    else { setShakeP2(true); setTimeout(() => setShakeP2(false), 500); }
   };
 
-  const joinRoom = async () => {
-    if (!roomId || !playerName) return alert('全て入力してください');
+  const checkGameOver = (state: any) => {
+    if (!state || result) return;
+    if (state.p1_hp <= 0) {
+      if (myRole === 'p1') handleDefeat(); else handleVictory();
+    } 
+    else if (state.p2_hp <= 0) {
+      if (myRole === 'p2') handleDefeat(); else handleVictory();
+    }
+  };
 
-    // 自分のデッキを作成
-    const myDeckFull = shuffle([...JOB_DECKS[selectedJob]]);
-    const myHand = myDeckFull.splice(0, 5);
+  const handleVictory = async () => { 
+    setResult('win'); 
+    await (supabase.from('profile') as any).upsert({ user_id: myName, combatPower: 1200, name: myName }, { onConflict: 'user_id' }); 
+  };
+  
+  const handleDefeat = () => { setResult('lose'); };
 
-    // 既存の部屋のデータを取得して、P2部分だけ自分のデータで上書きしたいが、
-    // 複雑になるので今回は「入室時はDBの既存フィールドを更新」する簡易版
-    // ※ 注意: 本当はトランザクションが必要ですが、簡易実装として
-    //   「まず部屋に入ってから、自分のデッキデータを送信する」形にします。
-    
-    // Step 1: 名前だけ登録
-    const { error } = await (supabase.from('battle_room') as any)
-      .update({ player2: playerName }) 
-      .eq('id', roomId);
+  // --- カード使用 ---
+  const playCard = async (card: any, index: number) => {
+    if (!board || result || board.turn !== myRole) return;
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    if (board[`${prefix}_energy`] < card.cost) return alert('⚡ エナジーが足りません！');
 
-    if (error) {
-       alert('部屋が見つかりません');
+    // スロット
+    if (card.id.startsWith('slot')) {
+       let nextState = JSON.parse(JSON.stringify(board));
+       nextState[`${prefix}_energy`] -= card.cost;
+       const usedCard = nextState[`${prefix}_hand`].splice(index, 1)[0];
+       nextState[`${prefix}_discard`].push(usedCard);
+       await updateBoard(nextState);
+       startSlotMachine();
        return;
     }
 
-    // Step 2: 自分のデッキ情報を上書きするために、一度データを取得して更新
-    // (これはバトル画面でやるのが安全ですが、ロビーでやっちゃいます)
-    const { data } = await (supabase.from('battle_room') as any).select('boardState').eq('id', roomId).single();
-    if(data) {
-       const newState = data.boardState;
-       newState.p2_name = playerName;
-       newState.p2_job = selectedJob;
-       newState.p2_deck = myDeckFull;
-       newState.p2_hand = myHand;
-       newState.p2_discard = [];
-       // P2のステータスリセット
-       newState.p2_hp = 50; newState.p2_energy = 3; newState.p2_block = 0; newState.p2_special = 0;
-       newState.p2_poison = 0; newState.p2_stun = false; newState.p2_emote = '';
-       
-       await (supabase.from('battle_room') as any).update({ boardState: newState }).eq('id', roomId);
-    }
+    // 通常カード
+    setTimeout(async () => {
+      let nextState = JSON.parse(JSON.stringify(board));
+      const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
+      const myRelic = nextState[`${prefix}_relic`]; // 自分のレリック取得
+      let log = `${myName}の${card.name}！`;
 
-    router.push(`/pvp/${roomId}?player=p2&name=${playerName}`);
+      nextState[`${prefix}_energy`] -= card.cost;
+      const usedCard = nextState[`${prefix}_hand`].splice(index, 1)[0];
+      nextState[`${prefix}_discard`].push(usedCard);
+      nextState[`${prefix}_special`] = Math.min(100, (nextState[`${prefix}_special`] || 0) + 20);
+
+      // 効果処理
+      if (card.effect === 'poison') {
+        nextState[`${enemyPrefix}_poison`] = (nextState[`${enemyPrefix}_poison`] || 0) + card.val;
+        log += ` ☠️相手に毒${card.val}!`;
+      } 
+      else if (card.effect === 'stun') {
+        nextState[`${enemyPrefix}_stun`] = true;
+        nextState[`${enemyPrefix}_hp`] -= card.val;
+        log += ` ⚡スタン付与! ${card.val}ダメ`;
+        triggerShake(enemyPrefix);
+      }
+      else if (card.effect === 'heal') {
+        let damage = card.val;
+        nextState[`${enemyPrefix}_hp`] -= damage;
+        nextState[`${prefix}_hp`] += card.val;
+        log += ` 🩸${damage}吸い取った!`;
+        triggerShake(enemyPrefix);
+      }
+      else if (card.type === 'skill') {
+        nextState[`${prefix}_block`] += card.val;
+        log += ` 🛡️ブロック+${card.val}`;
+      } 
+      else if (card.type === 'attack') {
+        let damage = card.val;
+        let targetBlock = nextState[`${enemyPrefix}_block`];
+        let targetHp = nextState[`${enemyPrefix}_hp`];
+        if (targetBlock >= damage) {
+          targetBlock -= damage; damage = 0; log += ' 🛡️防がれた！';
+        } else {
+          damage -= targetBlock; targetBlock = 0; targetHp -= damage; log += ` ⚔️${damage}ダメージ！`;
+          triggerShake(enemyPrefix);
+          
+          // ★レリック効果：吸血の牙 (ダメージを与えたら回復)
+          if (myRelic === 'vampire_fang') {
+             nextState[`${prefix}_hp`] += 1;
+             log += ' 🧛(吸血+1)';
+          }
+        }
+        nextState[`${enemyPrefix}_block`] = targetBlock;
+        nextState[`${enemyPrefix}_hp`] = targetHp;
+      }
+      
+      nextState.last_action = log;
+      checkGameOver(nextState);
+      await updateBoard(nextState);
+    }, 200);
   };
 
+  const executeUltimate = async () => {
+    setShowMiniGame(false);
+    const distance = Math.abs(50 - cursorPos);
+    const score = Math.max(0, 100 - (distance * 2)); 
+    const damage = Math.floor((score / 100) * 40) + 10;
+
+    let nextState = JSON.parse(JSON.stringify(board));
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
+
+    let log = `🔥 ${myName}の必殺技！(精度${score}%)`;
+    nextState[`${prefix}_special`] = 0;
+    
+    nextState[`${enemyPrefix}_hp`] -= damage;
+    log += ` 💥ガード不能 ${damage}ダメージ！`;
+    triggerShake(enemyPrefix);
+
+    nextState.last_action = log;
+    checkGameOver(nextState);
+    await updateBoard(nextState);
+  };
+
+  const sendEmote = async (emote: string) => {
+    if (!board) return;
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    await (supabase.from('battle_room') as any).update({ 
+      boardState: { ...board, [`${prefix}_emote`]: emote } 
+    }).eq('id', roomId);
+  };
+
+  // --- ターン終了処理 ---
+  const endTurn = async () => {
+    if (!board || board.turn !== myRole) return;
+    let nextState = JSON.parse(JSON.stringify(board));
+    const prefix = myRole === 'p1' ? 'p1' : 'p2';
+    const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
+    
+    // 1. 手札破棄
+    nextState[`${prefix}_discard`].push(...nextState[`${prefix}_hand`]);
+    nextState[`${prefix}_hand`] = [];
+
+    // 2. 相手の手札補充
+    let enemyDeck = nextState[`${enemyPrefix}_deck`];
+    let enemyDiscard = nextState[`${enemyPrefix}_discard`];
+    let enemyHand = nextState[`${enemyPrefix}_hand`] || [];
+    if (enemyHand.length < 5) {
+      const drawCount = 5 - enemyHand.length;
+      for (let i = 0; i < drawCount; i++) {
+        if (enemyDeck.length === 0) {
+          if (enemyDiscard.length === 0) break;
+          enemyDeck = shuffle(enemyDiscard);
+          enemyDiscard = [];
+          nextState.last_action = 'デッキ再構築！';
+        }
+        enemyHand.push(enemyDeck.pop());
+      }
+    }
+    nextState[`${enemyPrefix}_deck`] = enemyDeck;
+    nextState[`${enemyPrefix}_discard`] = enemyDiscard;
+    nextState[`${enemyPrefix}_hand`] = enemyHand;
+
+    // 3. 相手のターン開始準備 (★レリック効果ここ！)
+    let enemyEnergy = 3;
+    let enemyBlock = 0;
+    let log = '';
+    const enemyRelic = nextState[`${enemyPrefix}_relic`]; // 相手のレリック
+
+    // ★レリック：巨人の盾 (ブロック付与)
+    if (enemyRelic === 'titan_shield') {
+      enemyBlock += 3;
+      log += ' 🛡️巨人の盾(+3)';
+    }
+    // ★レリック：活気の指輪 (ピンチ時エナジー増加)
+    if (enemyRelic === 'energy_ring' && nextState[`${enemyPrefix}_hp`] <= 20) {
+      enemyEnergy += 1;
+      log += ' 💍活気の指輪(+1⚡)';
+    }
+
+    // 状態異常：スタン
+    if (nextState[`${enemyPrefix}_stun`]) {
+      enemyEnergy = 1; // スタン優先
+      nextState[`${enemyPrefix}_stun`] = false;
+      log += ' ⚡スタンで動けない！';
+    }
+
+    nextState[`${enemyPrefix}_energy`] = enemyEnergy;
+    nextState[`${enemyPrefix}_block`] = enemyBlock;
+
+    // 状態異常：毒
+    if ((nextState[`${enemyPrefix}_poison`] || 0) > 0) {
+      const poisonDmg = nextState[`${enemyPrefix}_poison`];
+      nextState[`${enemyPrefix}_hp`] -= poisonDmg;
+      log += ` ☠️毒で${poisonDmg}ダメ`;
+      nextState[`${enemyPrefix}_poison`] = Math.max(0, poisonDmg - 1);
+      triggerShake(enemyPrefix);
+    }
+    
+    if (log) nextState.last_action = log;
+    else nextState.last_action = `${myName} ターン終了`;
+
+    nextState.turn = enemyPrefix;
+    checkGameOver(nextState);
+    await updateBoard(nextState);
+  };
+
+  const updateBoard = async (newState: any) => {
+    await (supabase.from('battle_room') as any).update({ boardState: newState }).eq('id', roomId);
+  };
+
+  if (!board) return <div className="text-white p-10">読み込み中...</div>;
+
+  const isMyTurn = board.turn === myRole;
+  const prefix = myRole === 'p1' ? 'p1' : 'p2';
+  const enemyPrefix = myRole === 'p1' ? 'p2' : 'p1';
+  const myHand = board[`${prefix}_hand`] || [];
+  const mySpecial = board[`${prefix}_special`] || 0;
+  const myPoison = board[`${prefix}_poison`] || 0;
+  const myStun = board[`${prefix}_stun`] || false;
+  const myRelicId = board[`${prefix}_relic`]; // 自分のレリックID
+  const enemyPoison = board[`${enemyPrefix}_poison`] || 0;
+  const enemyStun = board[`${enemyPrefix}_stun`] || false;
+  const enemyRelicId = board[`${enemyPrefix}_relic`]; // 相手のレリックID
+
+  const enemyAreaClass = `bg-red-900/20 p-4 rounded-xl border border-red-500/30 text-center relative mt-2 transition-all ${enemyPrefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${enemyPrefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
+  const myAreaClass = `bg-blue-900/20 p-4 rounded-xl border border-blue-500/30 mb-2 transition-all ${prefix === 'p1' && shakeP1 ? 'animate-shake' : ''} ${prefix === 'p2' && shakeP2 ? 'animate-shake' : ''}`;
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4">
-      <h1 className="text-4xl font-bold mb-6 text-yellow-500 animate-pulse">⚔️ SLAY THE NEXT</h1>
+    <div className="min-h-screen bg-gray-900 text-white p-2 flex flex-col justify-between select-none relative">
       
-      <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md flex flex-col gap-4 border border-gray-700 shadow-xl">
-        {/* 名前入力 */}
-        <div>
-          <label className="text-xs text-gray-400">プレイヤー名</label>
-          <input type="text" placeholder="名前" value={playerName} onChange={(e) => setPlayerName(e.target.value)}
-            className="w-full p-3 rounded bg-gray-700 text-white font-bold border border-gray-600" />
-        </div>
+      {/* スロット＆ミニゲーム & 勝敗 (省略) */}
+      {showSlot && ( <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in"> <h2 className="text-4xl font-bold text-yellow-500 mb-8 animate-pulse">運命のルーレット...</h2> <div className="flex gap-4 bg-gray-800 p-8 rounded-xl border-4 border-yellow-600 shadow-[0_0_50px_gold]"> {reels.map((symbol, i) => <div key={i} className="w-24 h-32 bg-white text-black text-6xl flex items-center justify-center rounded border-4 border-gray-400 font-serif">{symbol}</div>)} </div> </div> )}
+      {showMiniGame && ( <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center"> <div className="text-3xl font-bold mb-4 text-yellow-400 animate-pulse">タイミングを合わせろ！</div> <div className="w-80 h-10 bg-gray-700 rounded-full relative overflow-hidden border-4 border-white"> <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-10 bg-red-600/80 z-0"></div> <div className="absolute top-0 bottom-0 w-2 bg-yellow-400 z-10 shadow-[0_0_10px_yellow]" style={{ left: `${cursorPos}%` }} /> </div> <button onClick={executeUltimate} className="mt-8 px-10 py-6 bg-red-600 text-white text-3xl font-black rounded-full shadow-[0_0_20px_red] hover:scale-105 active:scale-95">STOP !</button> </div> )}
+      {result && ( <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center animate-in fade-in zoom-in"> <h1 className={`text-6xl font-bold mb-4 ${result === 'win' ? 'text-yellow-400' : 'text-blue-600'}`}>{result === 'win' ? 'VICTORY' : 'DEFEAT'}</h1> <button onClick={() => router.push('/pvp')} className="px-8 py-3 bg-white text-black font-bold rounded hover:scale-105 transition">ロビーへ</button> </div> )}
 
-        {/* ジョブ選択 */}
-        <div>
-          <label className="text-xs text-gray-400">ジョブ選択</label>
-          <div className="flex gap-2 mt-1">
-            <button onClick={() => setSelectedJob('warrior')} className={`flex-1 py-3 rounded border-2 transition-all ${selectedJob === 'warrior' ? 'bg-red-900 border-red-500 shadow-[0_0_10px_red]' : 'bg-gray-700 border-gray-600 grayscale'}`}>
-              <div className="text-2xl">⚔️</div>
-              <div className="text-xs font-bold">戦士</div>
-            </button>
-            <button onClick={() => setSelectedJob('mage')} className={`flex-1 py-3 rounded border-2 transition-all ${selectedJob === 'mage' ? 'bg-purple-900 border-purple-500 shadow-[0_0_10px_purple]' : 'bg-gray-700 border-gray-600 grayscale'}`}>
-              <div className="text-2xl">🧙‍♂️</div>
-              <div className="text-xs font-bold">魔導士</div>
-            </button>
-            <button onClick={() => setSelectedJob('gambler')} className={`flex-1 py-3 rounded border-2 transition-all ${selectedJob === 'gambler' ? 'bg-yellow-900 border-yellow-500 shadow-[0_0_10px_yellow]' : 'bg-gray-700 border-gray-600 grayscale'}`}>
-              <div className="text-2xl">🎰</div>
-              <div className="text-xs font-bold">博徒</div>
-            </button>
+      <div className={enemyAreaClass}>
+        <div className="text-sm text-red-300">ENEMY ({board[`${enemyPrefix}_job`]})</div>
+        {board[`${enemyPrefix}_emote`] && <div className="absolute -left-4 top-0 text-6xl animate-bounce drop-shadow-lg z-20">{board[`${enemyPrefix}_emote`]}</div>}
+        
+        {/* 敵のレリック表示 */}
+        {enemyRelicId && RELIC_DATA[enemyRelicId] && (
+          <div className="absolute top-0 left-2 text-2xl" title={RELIC_DATA[enemyRelicId].desc}>{RELIC_DATA[enemyRelicId].icon}</div>
+        )}
+
+        <div className="text-4xl font-bold flex justify-center items-center gap-2">
+          {Math.max(0, board[`${enemyPrefix}_hp`])} HP
+          {enemyPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{enemyPoison}</span>}
+          {enemyStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+        </div>
+        {board[`${enemyPrefix}_block`] > 0 && <div className="absolute top-4 right-4 bg-blue-600 px-3 py-1 rounded-full font-bold">🛡️ {board[`${enemyPrefix}_block`]}</div>}
+        <div className="flex justify-center gap-1 mt-2">{[...Array(3)].map((_, i) => <div key={i} className={`w-3 h-3 rounded-full ${i < board[`${enemyPrefix}_energy`] ? 'bg-yellow-600' : 'bg-gray-700'}`} />)}</div>
+        <div className="w-1/2 mx-auto h-1 bg-gray-800 mt-2 rounded"><div className="h-full bg-purple-500 transition-all" style={{ width: `${board[`${enemyPrefix}_special`] || 0}%` }} /></div>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center gap-2">
+        <div className="text-yellow-400 font-bold animate-pulse text-center px-4 h-8">{board.last_action}</div>
+        <button onClick={endTurn} disabled={!isMyTurn || result !== null}
+          className={`px-8 py-3 rounded-full font-bold shadow-lg transition-all ${isMyTurn && !result ? 'bg-blue-600 hover:scale-110 text-white' : 'bg-gray-700 text-gray-500 opacity-50'}`}>
+          {isMyTurn ? 'ターン終了' : '相手のターン...'}
+        </button>
+      </div>
+
+      <div className={myAreaClass}>
+        <div className="flex justify-between items-center mb-2 px-2 relative">
+          {board[`${prefix}_emote`] && <div className="absolute -right-2 -top-10 text-6xl animate-bounce drop-shadow-lg z-20">{board[`${prefix}_emote`]}</div>}
+          <div>
+            <div className="text-sm text-blue-300">YOU ({myName})</div>
+            
+            {/* 自分のレリック表示 */}
+            {myRelicId && RELIC_DATA[myRelicId] && (
+              <div className="flex items-center gap-2 mb-1" title={RELIC_DATA[myRelicId].desc}>
+                <span className="text-2xl">{RELIC_DATA[myRelicId].icon}</span>
+                <span className="text-xs text-gray-300">{RELIC_DATA[myRelicId].desc.slice(0, 10)}...</span>
+              </div>
+            )}
+
+            <div className="text-3xl font-bold flex items-center gap-2">
+              {Math.max(0, board[`${prefix}_hp`])} HP
+              {board[`${prefix}_block`] > 0 && <span className="text-xl bg-blue-600 px-2 rounded-full">🛡️{board[`${prefix}_block`]}</span>}
+              {myPoison > 0 && <span className="text-sm bg-purple-900 px-2 rounded">☠️{myPoison}</span>}
+              {myStun && <span className="text-sm bg-yellow-600 px-2 rounded animate-pulse">⚡STAN</span>}
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <div className="text-xs font-bold text-purple-400">LIMIT</div>
+              <div className="w-32 h-4 bg-gray-800 rounded relative border border-gray-600 overflow-hidden">
+                <div className={`h-full transition-all duration-300 ${mySpecial >= 100 ? 'bg-purple-500 animate-pulse shadow-[0_0_10px_purple]' : 'bg-purple-900'}`} style={{ width: `${mySpecial}%` }} />
+              </div>
+              {mySpecial >= 100 && isMyTurn && !result && (
+                <button onClick={() => setShowMiniGame(true)} className="px-3 py-1 bg-purple-600 text-white font-bold text-xs rounded animate-bounce shadow-[0_0_15px_purple] hover:scale-110">🔥必殺!</button>
+              )}
+            </div>
           </div>
-          <div className="text-xs text-center mt-2 text-gray-300">
-            {selectedJob === 'warrior' && '【戦士】スタン攻撃で相手の動きを封じる！'}
-            {selectedJob === 'mage' && '【魔導士】毒でじわじわ削る＆回復魔法！'}
-            {selectedJob === 'gambler' && '【博徒】運命のスロットで一発逆転！'}
+          <div className="flex gap-1 absolute bottom-full right-0 mb-2">
+             {EMOTES.map(e => <button key={e} onClick={() => sendEmote(e)} className="text-xl bg-gray-800 hover:bg-gray-700 rounded p-1 shadow border border-gray-600">{e}</button>)}
           </div>
         </div>
 
-        {/* 部屋ID */}
-        <div>
-          <label className="text-xs text-gray-400">部屋ID</label>
-          <input type="text" placeholder="例: 1234" value={roomId} onChange={(e) => setRoomId(e.target.value)}
-            className="w-full p-3 rounded bg-gray-700 text-white font-bold border border-gray-600" />
-        </div>
-
-        <div className="flex gap-4 mt-2">
-          <button onClick={createRoom} className="flex-1 bg-blue-600 py-3 rounded font-bold hover:bg-blue-500">作成 (P1)</button>
-          <button onClick={joinRoom} className="flex-1 bg-green-600 py-3 rounded font-bold hover:bg-green-500">参加 (P2)</button>
+        <div className="flex gap-2 overflow-x-auto pb-2 min-h-[140px] items-end">
+          {myHand.map((card: any, index: number) => {
+            // ★キラ加工の判定（スロットかファイアなら光る）
+            const isRare = card.id.startsWith('slot') || card.id === 'm-fire';
+            return (
+            <button key={`${card.id}-${index}`} onClick={() => playCard(card, index)} disabled={!isMyTurn || board[`${prefix}_energy`] < card.cost || result !== null}
+              className={`flex-shrink-0 w-24 h-32 rounded-lg border-2 flex flex-col items-center justify-between p-1 transition-all relative 
+              ${isRare ? 'holo-card-bg' : ''} {/* ★キラ加工クラス適用 */}
+              ${!isMyTurn || result ? 'bg-gray-900 opacity-50' : board[`${prefix}_energy`] < card.cost ? 'bg-gray-800 grayscale' : 
+                isRare ? '' : // キラの場合は背景色を上書きしない
+                card.effect === 'poison' ? 'bg-purple-950 border-purple-400' :
+                card.effect === 'stun' ? 'bg-yellow-950 border-yellow-400' :
+                card.type === 'attack' ? 'bg-red-950 border-red-500 hover:-translate-y-2' : 'bg-blue-950 border-blue-400 hover:-translate-y-2'}`}>
+              <div className="absolute -top-2 -left-2 w-6 h-6 bg-yellow-500 text-black rounded-full flex items-center justify-center font-bold text-xs border border-white">{card.cost}</div>
+              <div className="font-bold text-xs mt-2 z-10">{card.name}</div>
+              <div className="text-[10px] text-gray-300 text-center leading-tight z-10">{card.desc}</div>
+              <div className={`text-lg font-black z-10 ${card.id.startsWith('slot') ? 'text-yellow-400 text-2xl' : card.effect ? 'text-green-400' : card.type === 'attack' ? 'text-red-400' : 'text-blue-400'}`}>
+                {card.id.startsWith('slot') ? '🎰' : card.type === 'attack' ? `⚔️${card.val}` : `🛡️${card.val}`}
+              </div>
+            </button>
+          )})}
         </div>
       </div>
     </div>
