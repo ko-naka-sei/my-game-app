@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
+export const dynamic = 'force-dynamic';
 // ------------------------------------
 // ユーティリティ & 定数
 // ------------------------------------
