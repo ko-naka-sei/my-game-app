@@ -130,3 +130,82 @@ body {
   z-index: 100;
   pointer-events: none;
 }
+
+/* app/globals.css の一番下に追加 */
+
+/* --- ⚡ クリティカルヒット演出 --- */
+@keyframes critical-zoom {
+  0% { transform: scale(1); filter: brightness(1); }
+  10% { transform: scale(1.5); filter: brightness(3) contrast(2); } /* 眩しく光ってズーム */
+  20% { transform: scale(1.2); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.animate-critical {
+  animation: critical-zoom 0.4s cubic-bezier(0.1, 0.7, 1.0, 0.1);
+  z-index: 50;
+  position: relative;
+}
+.animate-critical::after {
+  content: "CRITICAL!!";
+  position: absolute;
+  top: -50%; left: 50%;
+  transform: translate(-50%, 0);
+  font-size: 3rem;
+  font-weight: 900;
+  color: #ffcc00;
+  text-shadow: 0 0 20px red, 0 0 10px white;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: float-up 1s ease-out;
+}
+
+/* --- 🔥 覚醒モード（背景） --- */
+@keyframes awakening-pulse {
+  0% { box-shadow: inset 0 0 20px #ff0000; border-color: #ff0000; }
+  50% { box-shadow: inset 0 0 100px #ff0000, 0 0 50px red; border-color: #ffff00; }
+  100% { box-shadow: inset 0 0 20px #ff0000; border-color: #ff0000; }
+}
+.awakening-mode {
+  animation: awakening-pulse 1s infinite;
+  background: linear-gradient(to bottom, #2a0000, #000000); /* 赤黒い背景 */
+}
+/* app/globals.css の一番下に追加 */
+
+/* --- 詳細インスペクト画面 --- */
+.card-inspect-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(5px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in 0.2s ease-out;
+}
+
+.card-inspect-modal {
+  background: #1a1a1a;
+  border: 2px solid #444;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 400px;
+  padding: 24px;
+  box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+  transform: scale(0.95);
+  animation: zoom-in 0.2s ease-out forwards;
+}
+
+@keyframes zoom-in {
+  to { transform: scale(1); }
+}
+
+.flavor-text {
+  font-family: serif;
+  font-style: italic;
+  color: #888;
+  border-left: 2px solid #444;
+  padding-left: 12px;
+  margin: 16px 0;
+  font-size: 0.9rem;
+}
